@@ -527,6 +527,9 @@ STATIC = {
     '/': ('index.html', 'text/html; charset=utf-8'),
     '/index.html': ('index.html', 'text/html; charset=utf-8'),
     '/d3.min.js': ('d3.min.js', 'text/javascript; charset=utf-8'),
+    '/theme.js': ('theme.js', 'text/javascript; charset=utf-8'),
+    '/fonts/Tomorrow-Regular.ttf': ('fonts/Tomorrow-Regular.ttf', 'font/ttf'),
+    '/fonts/Tomorrow-Bold.ttf': ('fonts/Tomorrow-Bold.ttf', 'font/ttf'),
 }
 
 

@@ -30,7 +30,8 @@ Your browser opens on the map. The first scan of a big home folder takes a few s
 - **Click a folder** to dive in; click its empty space or press **Esc** to rise. The path at the top-left jumps to any parent.
 - **Scroll / drag** to zoom and pan freely. Dashed circles are folders whose contents load when you zoom into them.
 - **Start folder** (panel): type any path and press Scan, or select a folder and click *Start from here*.
-- **Live activity**: rings show reads (cyan), writes (orange), creates (green) and deletes (red). The log lists them; click one to jump to it. Use the ignore box to hide noisy paths.
+- **Live activity**: rings show reads (cyan), writes (orange), creates (green) and deletes (red). The log lists them; click one to jump to it. Type into *hide paths with...* to mute noisy folders.
+- **Light or dark**: follows your system setting; the switch in the top-right corner flips it.
 
 | System | Live activity |
 |---|---|
@@ -69,4 +70,6 @@ The GitHub workflow builds and tests Linux and Windows on every push, and publis
 
 ## Credits
 
-Drawing and layout use [d3](https://d3js.org) (ISC license, see `web/d3-LICENSE.txt`).
+- Look and feel: the house style of [Daemon Domain](https://daemondomain.net) (monochrome glass, `web/theme.js`).
+- Drawing and layout: [d3](https://d3js.org) (ISC license, see `web/d3-LICENSE.txt`).
+- Font: [Tomorrow](https://github.com/MonicaRizzolli/Tomorrow) by Tony de Marco and Monica Rizzolli (SIL Open Font License, see `web/fonts/OFL.txt`).

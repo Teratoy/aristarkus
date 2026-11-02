@@ -2,8 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Aristarkus</title>
+<link rel="preload" href="fonts/Tomorrow-Regular.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="preload" href="fonts/Tomorrow-Bold.ttf" as="font" type="font/ttf" crossorigin>
 <script>
   // send page errors to the server so they land in aristarkus-debug.log
   (() => {
@@ -12,122 +14,390 @@
     addEventListener('unhandledrejection', e => report(`unhandled rejection: ${e.reason && (e.reason.stack || e.reason)}`));
   })();
 </script>
-<script src="d3.min.js"></script>
 <style>
-  :root {
-    --bg: #0a0c0f;
-    --panel: rgba(16, 19, 24, 0.88);
-    --line: #252a32;
-    --text: #d9dee5;
-    --muted: #7c8592;
-    --accent: #e8ecf1;
-    --read: #22d3ee;
-    --write: #ff9f1c;
-    --create: #84e08f;
-    --delete: #ff5470;
+  /* Daemon Domain house style: tokens and recipes as in the site's site.css. */
+  @font-face {
+    font-family: 'Tomorrow';
+    src: url('fonts/Tomorrow-Regular.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
   }
+  @font-face {
+    font-family: 'Tomorrow';
+    src: url('fonts/Tomorrow-Bold.ttf') format('truetype');
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+  }
+
+  :root {
+    color-scheme: dark;
+    --bg: #000;
+    --fg: #ffffff;
+    --accent: #ffffff;
+    --fg-rgb: 255, 255, 255;
+    --bg-rgb: 0, 0, 0;
+    --panel-rgb: 10, 15, 20;
+    --glass-gradient: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.12) 0%,
+      rgba(255, 255, 255, 0.05) 45%,
+      rgba(0, 0, 0, 0.3) 50%,
+      rgba(0, 0, 0, 0.6) 100%
+    );
+    --glass-border: 1px solid rgba(255, 255, 255, 0.3);
+    --glass-shadow:
+      0 0 15px rgba(255, 255, 255, 0.2),
+      inset 0 1px 0 rgba(255, 255, 255, 0.4);
+    --title-glow: drop-shadow(0 0 8px rgba(255, 255, 255, 0.5));
+    --scroll-thumb: linear-gradient(180deg, #555, #333);
+    --error: #ff9b9b;
+    --success: #9dffc0;
+    --radius: 12px;
+    --transition: 600ms cubic-bezier(.2, .9, .2, 1);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #eeeeee;
+    --fg: #111418;
+    --accent: rgba(17, 20, 24, 0.35);
+    --fg-rgb: 17, 20, 24;
+    --bg-rgb: 255, 255, 255;
+    --panel-rgb: 246, 247, 249;
+    --glass-gradient: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.75) 0%,
+      rgba(255, 255, 255, 0.35) 45%,
+      rgba(17, 20, 24, 0.02) 50%,
+      rgba(17, 20, 24, 0.06) 100%
+    );
+    --glass-border: 1px solid rgba(17, 20, 24, 0.16);
+    --glass-shadow:
+      0 4px 18px rgba(17, 20, 24, 0.14),
+      inset 0 1px 0 rgba(255, 255, 255, 0.9);
+    --title-glow: drop-shadow(0 0 6px rgba(17, 20, 24, 0.18));
+    --scroll-thumb: linear-gradient(180deg, #c4c4c4, #dedede);
+    --error: #b3261e;
+    --success: #1b7a3e;
+  }
+
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
-    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+  }
+  body {
+    height: 100vh;
+    height: 100dvh;
+    font-family: 'Tomorrow', sans-serif;
+    font-size: 15px;
+    line-height: 1.4;
+    letter-spacing: 0.5px;
+    color: rgba(var(--fg-rgb), 0.88);
+    text-shadow: 0 1px 2px rgba(var(--bg-rgb), 0.8);
+    background:
+      radial-gradient(circle at 50% 120%, rgba(var(--fg-rgb), 0.25), rgba(var(--bg-rgb), 0) 60%),
+      linear-gradient(180deg, rgba(var(--bg-rgb), 0.2), rgba(var(--bg-rgb), 0.95)),
+      var(--bg);
+  }
   canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
-  button, input, select { font: inherit; color: var(--text); }
-  button { background: #1b2028; border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
-  button:hover { border-color: #3a414c; background: #222833; }
-  input[type=text], select { background: #0f1216; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; min-width: 0; }
-  input[type=text]:focus, select:focus { outline: 1px solid #4b5563; }
+  button, input, select { font: inherit; letter-spacing: inherit; }
 
-  #top { position: fixed; left: 16px; top: 14px; right: 360px; pointer-events: none; }
-  #top h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .04em; color: var(--accent); }
-  #crumbs { margin-top: 4px; pointer-events: auto; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #crumbs a { color: var(--text); cursor: pointer; text-decoration: none; }
-  #crumbs a:hover { text-decoration: underline; }
-  #crumbs span { margin: 0 4px; color: #4b5360; }
+  .btn {
+    color: var(--fg);
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-size: 16px;
+    border: 1px solid transparent;
+    background: transparent;
+    box-shadow: none;
+    transition: var(--transition);
+    text-shadow: 0 1px 2px rgb(var(--bg-rgb));
+    cursor: pointer;
+  }
+  .btn:hover:not(:disabled),
+  .btn:focus-visible {
+    color: var(--fg);
+    background: rgba(var(--fg-rgb), 0.1);
+    border-color: rgba(var(--fg-rgb), 0.3);
+    box-shadow: 0 0 10px var(--accent);
+    text-shadow: 0 0 5px var(--accent);
+    transform: translateY(-2px);
+    outline: none;
+  }
+  .btn:active:not(:disabled) { transform: scale(0.97); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .icon-btn {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .icon-btn svg { width: 18px; height: 18px; fill: currentColor; }
 
-  #panel { position: fixed; top: 12px; right: 12px; bottom: 12px; width: 336px; background: var(--panel);
-    border: 1px solid var(--line); border-radius: 10px; backdrop-filter: blur(8px);
-    display: flex; flex-direction: column; overflow: hidden; }
-  #panel.hidden { display: none; }
-  .sec { padding: 12px 14px; border-bottom: 1px solid var(--line); }
-  .sec h2 { margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-  .row { display: flex; gap: 6px; align-items: center; }
-  .row + .row { margin-top: 6px; }
+  input[type=text], select {
+    min-width: 0;
+    background: rgba(var(--bg-rgb), 0.45);
+    color: var(--fg);
+    border: 1px solid rgba(var(--fg-rgb), 0.22);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 16px;
+    text-shadow: none;
+    transition: var(--transition);
+  }
+  input[type=text]:focus, select:focus {
+    outline: none;
+    border-color: rgba(var(--fg-rgb), 0.55);
+    box-shadow: 0 0 0 3px rgba(var(--fg-rgb), 0.08);
+  }
+  input::placeholder { color: rgba(var(--fg-rgb), 0.45); }
+  option { background: rgb(var(--panel-rgb)); color: var(--fg); }
+  input[type=checkbox] { accent-color: var(--fg); width: 16px; height: 16px; margin: 0; }
+
+  .glass {
+    background: rgba(var(--panel-rgb), 0.75);
+    background-image: var(--glass-gradient);
+    border: var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    border-radius: var(--radius);
+    backdrop-filter: blur(12px);
+  }
+  .scroll::-webkit-scrollbar { width: 10px; }
+  .scroll::-webkit-scrollbar-track { background: rgba(var(--bg-rgb), 0.3); border-radius: 5px; }
+  .scroll::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border: 1px solid rgba(var(--fg-rgb), 0.2); border-radius: 8px; }
+  .scroll { scrollbar-width: thin; scrollbar-color: rgba(var(--fg-rgb), 0.3) rgba(var(--bg-rgb), 0.3); }
+
+  #top {
+    position: fixed;
+    left: max(16px, env(safe-area-inset-left));
+    top: max(12px, env(safe-area-inset-top));
+    right: 400px;
+    pointer-events: none;
+  }
+  #headline {
+    margin: 0;
+    font-weight: 700;
+    font-size: clamp(24px, 3vw, 36px);
+    color: var(--fg);
+    filter: var(--title-glow);
+  }
+  #crumbs {
+    margin-top: 2px;
+    pointer-events: auto;
+    font-size: 14px;
+    color: rgba(var(--fg-rgb), 0.55);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #crumbs a { color: rgba(var(--fg-rgb), 0.85); cursor: pointer; text-decoration: none; transition: var(--transition); }
+  #crumbs a:hover { color: var(--fg); text-shadow: 0 0 5px var(--accent); }
+  #crumbs span { margin: 0 5px; opacity: 0.5; }
+
+  /* Below the theme switch, which owns the top-right corner. */
+  #panel {
+    position: fixed;
+    top: calc(max(0.5rem, env(safe-area-inset-top)) + 48px);
+    right: max(12px, env(safe-area-inset-right));
+    bottom: max(12px, env(safe-area-inset-bottom));
+    width: 372px;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    transition: opacity var(--transition), transform var(--transition);
+  }
+  #panel.hidden { opacity: 0; transform: translateX(24px); pointer-events: none; }
+  .sec { padding: 14px 18px; border-bottom: 1px solid rgba(var(--fg-rgb), 0.15); }
+  .sec-head { display: flex; align-items: center; justify-content: space-between; margin: 0 0 10px; }
+  .sec h2 { margin: 0; font-size: 14px; font-weight: 700; color: rgba(var(--fg-rgb), 0.62); }
+  .sec-head .icon-btn { width: 32px; height: 32px; margin: -6px -8px -6px 0; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row + .row { margin-top: 8px; }
   .grow { flex: 1; }
-  .muted { color: var(--muted); }
+  .muted { color: rgba(var(--fg-rgb), 0.55); }
+  .meta { font-size: 12px; color: rgba(var(--fg-rgb), 0.55); }
   .stat { font-variant-numeric: tabular-nums; }
-  .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; }
-  .toggles label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
-  #sel .name { font-weight: 600; color: var(--accent); word-break: break-all; }
-  #sel .path { color: var(--muted); word-break: break-all; font-size: 12px; margin: 2px 0 6px; }
-  #sel .btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-  #logsec { flex: 1; display: flex; flex-direction: column; min-height: 120px; border-bottom: 0; }
-  #rates { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-bottom: 6px; font-size: 12px; }
+  #status { margin-top: 10px; display: block; }
+  .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; font-size: 14px; }
+  .toggles label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+  .toggles label:has(input:disabled) { opacity: 0.5; cursor: not-allowed; }
+  #sel .name { font-weight: 700; color: var(--fg); word-break: break-all; }
+  #sel .path { font-size: 12px; color: rgba(var(--fg-rgb), 0.55); word-break: break-all; margin: 2px 0 6px; }
+  #sel .btns { display: flex; gap: 4px; flex-wrap: wrap; margin: 8px -8px 0; }
+  #logsec { flex: 1 0 220px; display: flex; flex-direction: column; border-bottom: 0; }
+  #rates { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-bottom: 8px; font-size: 13px; }
   #rates span { white-space: nowrap; }
-  #rates b { font-weight: 600; }
-  #log { flex: 1; overflow-y: auto; font: 11.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace; margin: 0 -14px; padding: 0 14px; }
-  #log div { display: flex; gap: 6px; white-space: nowrap; cursor: pointer; }
-  #log div:hover { background: #1a1f27; }
+  #rates b { font-weight: 700; color: var(--fg); }
+  #log { flex: 1 1 0; min-height: 0; overflow-y: auto; font-size: 13px; line-height: 1.6; margin: 0 -10px; padding: 0 10px; }
+  #log div { display: flex; gap: 8px; white-space: nowrap; cursor: pointer; border-radius: 6px; padding: 0 4px; transition: background var(--transition); }
+  #log div:hover { background: rgba(var(--fg-rgb), 0.08); }
   #log .k { width: 10px; flex: none; font-weight: 700; }
-  #log .p { overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; flex: 1; }
-  #log .n { color: var(--muted); flex: none; }
-  .legend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; }
-  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
-  .legend i.ring { background: none; border: 2px solid; width: 10px; height: 10px; }
+  #log .p { overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; flex: 1; color: rgba(var(--fg-rgb), 0.8); }
+  #log .n { flex: none; color: rgba(var(--fg-rgb), 0.55); }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+  .dot.ring { background: none; border: 2px solid; width: 10px; height: 10px; }
+  .dot.folder { background: rgba(var(--fg-rgb), 0.12); border: 1px dashed rgba(var(--fg-rgb), 0.6); }
 
-  #tip { position: fixed; pointer-events: none; background: rgba(12, 14, 18, .95); border: 1px solid var(--line);
-    border-radius: 6px; padding: 6px 9px; max-width: 360px; display: none; z-index: 5; font-size: 12px; }
-  #tip b { color: var(--accent); word-break: break-all; }
+  #tip {
+    position: fixed;
+    z-index: 5;
+    display: none;
+    max-width: 360px;
+    padding: 8px 12px;
+    font-size: 13px;
+    pointer-events: none;
+    background-color: rgba(var(--panel-rgb), 0.92);
+  }
+  #tip b { color: var(--fg); word-break: break-all; }
   #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
-  #overlay div { text-align: center; color: var(--muted); }
-  #overlay strong { display: block; color: var(--text); font-size: 15px; font-weight: 500; margin-bottom: 4px; }
-  #toggle { position: fixed; right: 12px; top: 12px; display: none; z-index: 4; }
-  #panel .close { float: right; padding: 0 6px; border: 0; background: none; color: var(--muted); }
-  .err { color: var(--delete); }
+  #overlay div { text-align: center; color: rgba(var(--fg-rgb), 0.55); }
+  #overlay strong { display: block; color: var(--fg); font-size: 20px; font-weight: 700; margin-bottom: 4px; filter: var(--title-glow); }
+  #toggle {
+    position: fixed;
+    top: max(0.5rem, env(safe-area-inset-top));
+    right: calc(max(0.5rem, env(safe-area-inset-right)) + 64px + 12px);
+    z-index: 4;
+  }
+  #toggle[hidden] { display: none; }
+  .err { color: var(--error); }
+
+  /* Light/dark switch, added by theme.js (same rules as the site). */
+  .theme-switch {
+    position: fixed;
+    top: max(0.5rem, env(safe-area-inset-top));
+    right: max(0.5rem, env(safe-area-inset-right));
+    z-index: 1001;
+    width: 64px;
+    height: 40px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 20px;
+    color: rgba(var(--fg-rgb), 0.7);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    transition: var(--transition);
+  }
+  .theme-switch:focus { outline: none; }
+  .theme-switch:hover,
+  .theme-switch:focus-visible { color: var(--fg); transform: translateY(-2px); }
+  .theme-switch:active { transform: translateY(0) scale(0.97); }
+  .theme-switch-track {
+    position: relative;
+    width: 52px;
+    height: 26px;
+    padding: 0 7px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border: 1px solid rgba(var(--fg-rgb), 0.3);
+    border-radius: 13px;
+    background: rgba(var(--panel-rgb), 0.6);
+    box-shadow: inset 0 1px 2px rgba(var(--bg-rgb), 0.5);
+    backdrop-filter: blur(6px);
+    transition: var(--transition);
+  }
+  .theme-switch:hover .theme-switch-track,
+  .theme-switch:focus-visible .theme-switch-track {
+    background: rgba(var(--fg-rgb), 0.1);
+    border-color: rgba(var(--fg-rgb), 0.45);
+    box-shadow: 0 0 10px var(--accent);
+  }
+  .theme-switch-track > svg { width: 11px; height: 11px; fill: currentColor; opacity: 0.55; }
+  .theme-switch-knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--fg);
+    color: var(--bg);
+    box-shadow: 0 0 8px var(--accent);
+    transition: transform var(--transition);
+  }
+  .theme-switch-knob svg { width: 12px; height: 12px; fill: currentColor; }
+  .theme-switch[aria-checked="true"] .theme-switch-knob { transform: translateX(26px); }
+  .theme-switch[aria-checked="true"] .knob-moon,
+  .theme-switch[aria-checked="false"] .knob-sun { display: none; }
 
   @media (max-width: 720px) {
-    #top { right: 64px; }
+    #top { right: 140px; }
     #panel { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; height: 55vh; }
+    .sec { padding: 12px 14px; }
+  }
+  @media (hover: none) and (pointer: coarse) {
+    .btn { min-height: 44px; }
+    .icon-btn, .sec-head .icon-btn { width: 44px; height: 44px; }
+    .theme-switch { height: 44px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, .theme-switch, .theme-switch-knob { transition: none !important; }
   }
 </style>
+<script src="theme.js"></script>
+<script src="d3.min.js"></script>
 </head>
 <body>
-<canvas id="c"></canvas>
+<canvas id="c" aria-hidden="true"></canvas>
 
+<main role="main" aria-labelledby="headline">
 <div id="top">
-  <h1>ARISTARKUS</h1>
-  <div id="crumbs"></div>
+  <h1 id="headline">Aristarkus</h1>
+  <nav id="crumbs" aria-label="Current folder"></nav>
 </div>
 
-<div id="overlay"><div><strong>Connecting…</strong><span id="ovsub"></span></div></div>
-<div id="tip"></div>
-<button id="toggle" title="Show panel">☰</button>
+<div id="overlay" role="status" aria-live="polite"><div><strong>Connecting…</strong><span id="ovsub"></span></div></div>
+<div id="tip" class="glass"></div>
+<button id="toggle" class="btn icon-btn" hidden aria-label="Show panel" title="Show panel">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+</button>
 
-<aside id="panel">
+<aside id="panel" class="glass scroll" aria-label="Controls">
   <div class="sec">
-    <button class="close" id="hide" title="Hide panel">✕</button>
-    <h2>Start folder</h2>
-    <div class="row">
-      <input type="text" id="rootIn" class="grow" spellcheck="false" placeholder="/path/to/folder">
-      <button id="scan">Scan</button>
+    <div class="sec-head">
+      <h2>Start folder</h2>
+      <button class="btn icon-btn" id="hide" aria-label="Hide panel" title="Hide panel">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg>
+      </button>
     </div>
     <div class="row">
-      <button id="home">Home</button>
-      <span class="muted">Detail</span>
+      <input type="text" id="rootIn" class="grow" spellcheck="false" placeholder="/some/folder" aria-label="Start folder">
+      <button class="btn" id="scan">Scan</button>
+    </div>
+    <div class="row">
+      <button class="btn" id="home">Home</button>
+      <span class="grow"></span>
+      <label class="muted" for="budget">detail</label>
       <select id="budget">
         <option value="8000">light</option>
         <option value="25000" selected>normal</option>
         <option value="70000">dense</option>
       </select>
     </div>
-    <div class="row muted stat" id="status">—</div>
+    <div class="meta stat" id="status" role="status" aria-live="polite">—</div>
   </div>
 
   <div class="sec" id="sel">
-    <h2>Selection</h2>
-    <div class="muted">Hover or click a sphere. Click a folder to dive in; click its empty space again to rise.</div>
+    <div class="sec-head"><h2>Selection</h2></div>
+    <div class="muted">Hover or poke a sphere. Click a folder to dive in, click its empty bit to come back up.</div>
   </div>
 
   <div class="sec">
-    <h2>Display</h2>
+    <div class="sec-head"><h2>Display</h2></div>
     <div class="toggles">
       <label><input type="checkbox" id="optMotion" checked> organic motion</label>
       <label><input type="checkbox" id="optThreads" checked> activity threads</label>
@@ -135,22 +405,23 @@
       <label><input type="checkbox" id="optWrites" checked> show writes</label>
       <label><input type="checkbox" id="optLabels" checked> labels</label>
     </div>
-    <div class="row" style="margin-top:8px">
-      <input type="text" id="ignore" class="grow" spellcheck="false" placeholder="ignore paths containing… (comma separated)">
+    <div class="row" style="margin-top:10px">
+      <input type="text" id="ignore" class="grow" spellcheck="false" placeholder="hide paths with... (comma separated)" aria-label="Hide activity on paths containing">
     </div>
   </div>
 
   <div class="sec">
-    <h2>Legend</h2>
+    <div class="sec-head"><h2>Legend</h2></div>
     <div class="legend" id="legend"></div>
   </div>
 
   <div class="sec" id="logsec">
-    <h2>Live activity</h2>
-    <div id="rates" class="stat"></div>
-    <div id="log"></div>
+    <div class="sec-head"><h2>Live activity</h2></div>
+    <div id="rates" class="stat" role="status" aria-live="off"></div>
+    <div id="log" class="scroll"></div>
   </div>
 </aside>
+</main>
 
 <script>
 (() => {
@@ -164,11 +435,12 @@ const EXPAND_PX = 70;      // fetch a collapsed folder's contents once it is thi
 const LAZY_BUDGET = 3000;
 const PULSE_LIFE = 1.4, THREAD_LIFE = 2.6;
 
+// activity keeps its colours in both themes, just deeper on light paper; `color` follows the theme
 const KIND = {
-  r: { label: 'read',   color: '#22d3ee', mark: 'R' },
-  w: { label: 'write',  color: '#ff9f1c', mark: 'W' },
-  c: { label: 'create', color: '#84e08f', mark: '+' },
-  d: { label: 'delete', color: '#ff5470', mark: '−' },
+  r: { label: 'read',   dark: '#22d3ee', light: '#0e7490', mark: 'R' },
+  w: { label: 'write',  dark: '#ff9f1c', light: '#c2410c', mark: 'W' },
+  c: { label: 'create', dark: '#84e08f', light: '#15803d', mark: '+' },
+  d: { label: 'delete', dark: '#ff5470', light: '#be123c', mark: '−' },
 };
 
 const CATS = {
@@ -197,16 +469,10 @@ let W = 0, H = 0, DPR = 1;
 let T = d3.zoomIdentity;
 let root = null, rootPath = '', rootPrefix = '/', gen = -1;
 let frame = 0, dirty = true, hover = null, selected = null, focusNode = null;
-const opts = { motion: true, threads: true, reads: true, writes: true, labels: true };
+const opts = { motion: !matchMedia('(prefers-reduced-motion: reduce)').matches, threads: true, reads: true, writes: true, labels: true };
 let ignore = [];
 
 // ------------------------------------------------------------ tree model
-
-function hashHue(s) {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
-  return ((h >>> 0) % 360);
-}
 
 function build(j, parent) {
   const n = {
@@ -215,19 +481,32 @@ function build(j, parent) {
     ph1: Math.random() * TAU, ph2: Math.random() * TAU,
     w1: 0.22 + Math.random() * 0.4, w2: 0.22 + Math.random() * 0.4,
   };
-  n.hue = !parent ? 210 : !parent.parent ? hashHue(n.name) : parent.hue;
   n.cat = n.kind === 'f' ? category(n.name) : null;
-  paint(n);
   if (j.c) setChildren(n, j.c.map(c => build(c, n)));
   return n;
 }
 
-function paint(n) {
-  const h = n.hue;
-  if (n.kind === 'f') { n.fill = CATS[n.cat].color; n.stroke = 'rgba(0,0,0,.35)'; }
-  else if (n.kind === 'o') { n.fill = 'rgba(150,160,175,.22)'; n.stroke = 'rgba(170,180,195,.5)'; }
-  else if (n.kind === 'c') { n.fill = `hsla(${h},45%,58%,.16)`; n.stroke = `hsla(${h},50%,68%,.55)`; }
-  else { n.fill = `hsla(${h},40%,55%,.045)`; n.stroke = `hsla(${h},45%,66%,.42)`; }
+// Folders are monochrome glass in the site's ink; only files carry colour (their type).
+// Rebuilt from the CSS tokens whenever theme.js flips the theme.
+const PAL = {};
+function readTheme() {
+  const css = getComputedStyle(document.documentElement);
+  const ink = css.getPropertyValue('--fg-rgb').trim(), paper = css.getPropertyValue('--bg-rgb').trim();
+  const light = document.documentElement.dataset.theme === 'light';
+  Object.assign(PAL, {
+    d: [`rgba(${ink},.035)`, `rgba(${ink},.34)`],
+    c: [`rgba(${ink},.1)`, `rgba(${ink},.55)`],
+    o: [`rgba(${ink},.15)`, `rgba(${ink},.4)`],
+    fileEdge: `rgba(${paper},.4)`,
+    hover: `rgba(${ink},.6)`,
+    selected: `rgb(${ink})`,
+    label: `rgba(${ink},.92)`,
+    labelMeta: `rgba(${ink},.55)`,
+    shadow: `rgba(${paper},.9)`,
+  });
+  for (const v of Object.values(KIND)) v.color = light ? v.light : v.dark;
+  renderLegend();
+  dirty = true;
 }
 
 function setChildren(n, kids) {
@@ -301,7 +580,7 @@ function expand(n) {
     .then(r => r.ok ? r.json() : Promise.reject(r.status))
     .then(j => {
       if (myGen !== gen || n.kind !== 'c') return;
-      n.kind = 'd'; paint(n);
+      n.kind = 'd';
       setChildren(n, (j.c || []).map(c => build(c, n)));
       const R = n.r;
       layoutInto(n, R);
@@ -318,7 +597,7 @@ async function waitAndLoad() {
   root = null; hover = selected = focusNode = null; showSel(null); dirty = true;
   let st;
   for (;;) {
-    try { st = await status(); } catch { overlay('Server not reachable', 'start it with: python3 aristarkus.py'); await sleep(1500); continue; }
+    try { st = await status(); } catch { overlay("Can't reach the server.", 'start it with: python3 aristarkus.py'); await sleep(1500); continue; }
     $('#rootIn').value = $('#rootIn').value || st.root;
     showStatus(st);
     if (!st.scanning) break;
@@ -408,13 +687,14 @@ function drawNode(n, x, y, t) {
   ctx.arc(sx, sy, sr, 0, TAU);
   if (n.kind === 'f') {
     ctx.globalAlpha = 0.82;
-    ctx.fillStyle = n.fill; ctx.fill();
+    ctx.fillStyle = CATS[n.cat].color; ctx.fill();
     ctx.globalAlpha = 1;
-    if (sr > 4) { ctx.strokeStyle = n.stroke; ctx.lineWidth = 1; ctx.stroke(); }
+    if (sr > 4) { ctx.strokeStyle = PAL.fileEdge; ctx.lineWidth = 1; ctx.stroke(); }
   } else {
-    ctx.fillStyle = n.fill; ctx.fill();
+    const [fill, stroke] = PAL[n.kind];
+    ctx.fillStyle = fill; ctx.fill();
     if (sr > 1.5) {
-      ctx.strokeStyle = n.stroke; ctx.lineWidth = 1;
+      ctx.strokeStyle = stroke; ctx.lineWidth = 1;
       if (n.kind !== 'd' && sr > 6) ctx.setLineDash([3, 3]);
       if (n.loading) ctx.globalAlpha = 0.4 + 0.4 * Math.sin(t * 8);
       ctx.stroke();
@@ -422,7 +702,7 @@ function drawNode(n, x, y, t) {
     }
   }
   if (n === hover || n === selected) {
-    ctx.strokeStyle = n === selected ? '#fff' : 'rgba(255,255,255,.6)';
+    ctx.strokeStyle = n === selected ? PAL.selected : PAL.hover;
     ctx.lineWidth = n === selected ? 2 : 1.5;
     ctx.stroke();
   }
@@ -460,29 +740,33 @@ function drawLabels() {
   placed.length = 0;
   labels.sort((a, b) => b[3] - a[3]);
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.shadowColor = 'rgba(0,0,0,.9)'; ctx.shadowBlur = 4;
+  ctx.shadowColor = PAL.shadow;
   const max = Math.min(labels.length, 140);
   for (let i = 0; i < max; i++) {
     const [n, sx, sy, sr] = labels[i];
     const isFile = n.kind === 'f' || n.kind === 'o';
     const fs = Math.max(10, Math.min(15, sr * (isFile ? 0.2 : 0.11)));
-    ctx.font = `${isFile ? 400 : 600} ${fs}px ui-sans-serif, system-ui, sans-serif`;
+    ctx.font = `${isFile ? 400 : 700} ${fs}px Tomorrow, sans-serif`;
     const name = n === root ? rootPath : n.name;
     if (isFile) {
       const s = fit(name, sr * 1.7);
       if (!s || !place(s, sx, sy, fs)) continue;
-      ctx.fillStyle = 'rgba(10,12,15,.92)';
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = 'rgba(10,12,15,.92)';   // dark ink on the file's colour, in both themes
       ctx.fillText(s, sx, sy);
     } else {
       const ly = sy - sr + fs * 1.3;
       const s = fit(name, sr * 1.1);
       if (!s || !place(s, sx, ly, fs)) continue;
-      ctx.fillStyle = `hsla(${n.hue},55%,82%,.95)`;
+      ctx.shadowBlur = 4;
+      ctx.fillStyle = PAL.label;
       ctx.fillText(s, sx, ly);
       if (sr > 120) {
-        ctx.font = `400 ${Math.max(9, fs * 0.8)}px ui-sans-serif, system-ui, sans-serif`;
-        ctx.fillStyle = 'rgba(200,208,218,.6)';
-        ctx.fillText(fmtBytes(n.size), sx, ly + fs * 1.15);
+        const ms = Math.max(9, fs * 0.8), size = fmtBytes(n.size);
+        ctx.font = `400 ${ms}px Tomorrow, sans-serif`;
+        if (!place(size, sx, ly + fs * 1.15, ms)) continue;
+        ctx.fillStyle = PAL.labelMeta;
+        ctx.fillText(size, sx, ly + fs * 1.15);
       }
     }
   }
@@ -599,7 +883,7 @@ setInterval(() => {
   Object.assign(shown, rate);
   for (const k in rate) rate[k] = 0;
   const extra = (dropped ? ` · ${fmtInt(dropped)} merged` : '') + (overflowed ? ' · <span class="err">queue overflow</span>' : '');
-  $('#rates').innerHTML = Object.entries(KIND).map(([k, v]) => `<span style="color:${v.color}"><b>${fmtInt(shown[k])}</b>/s ${v.label}</span>`).join('') + `<span class="muted">${extra}</span>`;
+  $('#rates').innerHTML = Object.entries(KIND).map(([k, v]) => `<span><i class="dot" style="background:${v.color}"></i><b>${fmtInt(shown[k])}</b>/s ${v.label}</span>`).join('') + `<span class="muted">${extra}</span>`;
   dropped = 0; overflowed = false;
 }, 1000);
 
@@ -636,15 +920,14 @@ function tick(now) {
   lastT = t;
   coolDown(dt);
   if (!root) {
-    if (dirty) { ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.fillStyle = '#0a0c0f'; ctx.fillRect(0, 0, W, H); dirty = false; }
+    if (dirty) { ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.clearRect(0, 0, W, H); dirty = false; }
     return;
   }
   if (!opts.motion && !pulses.length && !threads.length && !heated.size && !dirty && !inflight) return;
   dirty = false;
   frame++;
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  ctx.fillStyle = '#0a0c0f';
-  ctx.fillRect(0, 0, W, H);
+  ctx.clearRect(0, 0, W, H);
   labels.length = 0;
   drawNode(root, 0, 0, t);
   drawThreads(t);
@@ -659,10 +942,16 @@ const zoom = d3.zoom()
   .on('zoom', e => { T = e.transform; dirty = true; });
 d3.select(canvas).call(zoom).on('dblclick.zoom', null);
 
+// the part of the window the panel doesn't cover: beside it on wide screens, above it on narrow ones
 function viewBox() {
-  const panelOpen = !$('#panel').classList.contains('hidden') && W > 720;
-  const w = panelOpen ? W - 360 : W;
-  return { cx: w / 2, cy: H / 2 + 14, size: Math.min(w, H - 40) };
+  const panel = $('#panel');
+  if (panel.classList.contains('hidden')) return { cx: W / 2, cy: H / 2 + 14, size: Math.min(W, H - 40) };
+  if (W > 720) {
+    const w = W - panel.offsetWidth - 24;
+    return { cx: w / 2, cy: H / 2 + 14, size: Math.min(w, H - 40) };
+  }
+  const top = 70, h = H - panel.offsetHeight - 8 - top;
+  return { cx: W / 2, cy: top + h / 2, size: Math.min(W - 16, h) };
 }
 
 function fitRoot(animate) { zoomTo(root, animate); }
@@ -730,11 +1019,12 @@ function describe(n, short) {
 
 function showSel(n) {
   const box = $('#sel');
-  if (!n) { box.innerHTML = '<h2>Selection</h2><div class="muted">Hover or click a sphere. Click a folder to dive in; click its empty space again to rise.</div>'; return; }
+  const head = '<div class="sec-head"><h2>Selection</h2></div>';
+  if (!n) { box.innerHTML = head + '<div class="muted">Hover or poke a sphere. Click a folder to dive in, click its empty bit to come back up.</div>'; return; }
   const isDir = n.kind === 'd' || n.kind === 'c';
-  box.innerHTML = `<h2>Selection</h2>${describe(n, false)}<div class="btns">
-    ${isDir ? '<button data-a="zoom">Zoom here</button><button data-a="root">Start from here</button>' : '<button data-a="up">Show folder</button>'}
-    <button data-a="copy">Copy path</button></div>`;
+  box.innerHTML = `${head}${describe(n, false)}<div class="btns">
+    ${isDir ? '<button class="btn" data-a="zoom">Zoom here</button><button class="btn" data-a="root">Start from here</button>' : '<button class="btn" data-a="up">Show folder</button>'}
+    <button class="btn" data-a="copy">Copy path</button></div>`;
   box.querySelector('.btns').onclick = e => {
     const a = e.target.dataset.a;
     if (a === 'zoom') zoomTo(n);
@@ -769,17 +1059,22 @@ for (const [id, key] of [['optMotion', 'motion'], ['optThreads', 'threads'], ['o
   $('#' + id).onchange = e => { opts[key] = e.target.checked; dirty = true; };
 }
 $('#ignore').oninput = e => { ignore = e.target.value.split(',').map(s => s.trim()).filter(Boolean); };
-$('#hide').onclick = () => { $('#panel').classList.add('hidden'); $('#toggle').style.display = 'block'; dirty = true; };
-$('#toggle').onclick = () => { $('#panel').classList.remove('hidden'); $('#toggle').style.display = 'none'; dirty = true; };
+$('#hide').onclick = () => { $('#panel').classList.add('hidden'); $('#toggle').hidden = false; dirty = true; };
+$('#toggle').onclick = () => { $('#panel').classList.remove('hidden'); $('#toggle').hidden = true; dirty = true; };
+$('#optMotion').checked = opts.motion;
 addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   if (e.key === 'Escape' && focusNode && focusNode.parent) zoomTo(focusNode.parent);
 });
 
-$('#legend').innerHTML =
-  Object.entries(CATS).map(([k, v]) => `<span><i style="background:${v.color}"></i>${k}</span>`).join('') +
-  '<span><i style="background:hsla(210,45%,58%,.35);border:1px dashed hsla(210,50%,68%,.8)"></i>folder (zoom to open)</span>' +
-  Object.values(KIND).map(v => `<span><i class="ring" style="border-color:${v.color}"></i>${v.label}</span>`).join('');
+function renderLegend() {
+  $('#legend').innerHTML =
+    Object.entries(CATS).map(([k, v]) => `<span><i class="dot" style="background:${v.color}"></i>${k}</span>`).join('') +
+    '<span><i class="dot folder"></i>folder (zoom to open)</span>' +
+    Object.values(KIND).map(v => `<span><i class="dot ring" style="border-color:${v.color}"></i>${v.label}</span>`).join('');
+}
+addEventListener('themechange', readTheme);
+readTheme();
 
 // ------------------------------------------------------------ utils
 

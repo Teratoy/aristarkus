@@ -1,0 +1,71 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04 so the Linux build also runs on older distributions (glibc 2.35+)
+          - os: ubuntu-22.04
+            system: linux
+          - os: windows-latest
+            system: windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test the script
+        run: python tests/smoke.py aristarkus.py
+      - name: Build
+        run: |
+          pip install pyinstaller==6.22.2
+          python build.py
+      - name: Test the builds
+        shell: bash
+        run: python tests/smoke.py dist/aristarkus-* && rm -f dist/*.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aristarkus-${{ matrix.system }}
+          path: dist/aristarkus-*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -f dist/*.log
+          cat > notes.md <<'EOF'
+          Standalone builds, no Python needed.
+
+          | File | For |
+          |---|---|
+          | `aristarkus-windows-x64.exe` | Windows 10/11 |
+          | `aristarkus-windows-x64-debug.exe` | Windows, writes `aristarkus-debug.log` next to the .exe |
+          | `aristarkus-linux-x64` | Linux x86-64 (`chmod +x` it first) |
+          | `aristarkus-linux-x64-debug` | Linux, writes `aristarkus-debug.log` next to the program |
+
+          The builds are unsigned: Windows SmartScreen will warn, choose **More info → Run anyway**.
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "Aristarkus $GITHUB_REF_NAME" --notes-file notes.md

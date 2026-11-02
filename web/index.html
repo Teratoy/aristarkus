@@ -1,0 +1,812 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aristarkus</title>
+<script>
+  // send page errors to the server so they land in aristarkus-debug.log
+  (() => {
+    const report = message => fetch('/api/log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) }).catch(() => {});
+    addEventListener('error', e => report(`${e.message} at ${e.filename}:${e.lineno}:${e.colno}`));
+    addEventListener('unhandledrejection', e => report(`unhandled rejection: ${e.reason && (e.reason.stack || e.reason)}`));
+  })();
+</script>
+<script src="d3.min.js"></script>
+<style>
+  :root {
+    --bg: #0a0c0f;
+    --panel: rgba(16, 19, 24, 0.88);
+    --line: #252a32;
+    --text: #d9dee5;
+    --muted: #7c8592;
+    --accent: #e8ecf1;
+    --read: #22d3ee;
+    --write: #ff9f1c;
+    --create: #84e08f;
+    --delete: #ff5470;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
+  button, input, select { font: inherit; color: var(--text); }
+  button { background: #1b2028; border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button:hover { border-color: #3a414c; background: #222833; }
+  input[type=text], select { background: #0f1216; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; min-width: 0; }
+  input[type=text]:focus, select:focus { outline: 1px solid #4b5563; }
+
+  #top { position: fixed; left: 16px; top: 14px; right: 360px; pointer-events: none; }
+  #top h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .04em; color: var(--accent); }
+  #crumbs { margin-top: 4px; pointer-events: auto; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #crumbs a { color: var(--text); cursor: pointer; text-decoration: none; }
+  #crumbs a:hover { text-decoration: underline; }
+  #crumbs span { margin: 0 4px; color: #4b5360; }
+
+  #panel { position: fixed; top: 12px; right: 12px; bottom: 12px; width: 336px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px; backdrop-filter: blur(8px);
+    display: flex; flex-direction: column; overflow: hidden; }
+  #panel.hidden { display: none; }
+  .sec { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .sec h2 { margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .row { display: flex; gap: 6px; align-items: center; }
+  .row + .row { margin-top: 6px; }
+  .grow { flex: 1; }
+  .muted { color: var(--muted); }
+  .stat { font-variant-numeric: tabular-nums; }
+  .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; }
+  .toggles label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  #sel .name { font-weight: 600; color: var(--accent); word-break: break-all; }
+  #sel .path { color: var(--muted); word-break: break-all; font-size: 12px; margin: 2px 0 6px; }
+  #sel .btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  #logsec { flex: 1; display: flex; flex-direction: column; min-height: 120px; border-bottom: 0; }
+  #rates { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-bottom: 6px; font-size: 12px; }
+  #rates span { white-space: nowrap; }
+  #rates b { font-weight: 600; }
+  #log { flex: 1; overflow-y: auto; font: 11.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace; margin: 0 -14px; padding: 0 14px; }
+  #log div { display: flex; gap: 6px; white-space: nowrap; cursor: pointer; }
+  #log div:hover { background: #1a1f27; }
+  #log .k { width: 10px; flex: none; font-weight: 700; }
+  #log .p { overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; flex: 1; }
+  #log .n { color: var(--muted); flex: none; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+  .legend i.ring { background: none; border: 2px solid; width: 10px; height: 10px; }
+
+  #tip { position: fixed; pointer-events: none; background: rgba(12, 14, 18, .95); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 9px; max-width: 360px; display: none; z-index: 5; font-size: 12px; }
+  #tip b { color: var(--accent); word-break: break-all; }
+  #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+  #overlay div { text-align: center; color: var(--muted); }
+  #overlay strong { display: block; color: var(--text); font-size: 15px; font-weight: 500; margin-bottom: 4px; }
+  #toggle { position: fixed; right: 12px; top: 12px; display: none; z-index: 4; }
+  #panel .close { float: right; padding: 0 6px; border: 0; background: none; color: var(--muted); }
+  .err { color: var(--delete); }
+
+  @media (max-width: 720px) {
+    #top { right: 64px; }
+    #panel { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; height: 55vh; }
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="top">
+  <h1>ARISTARKUS</h1>
+  <div id="crumbs"></div>
+</div>
+
+<div id="overlay"><div><strong>Connecting…</strong><span id="ovsub"></span></div></div>
+<div id="tip"></div>
+<button id="toggle" title="Show panel">☰</button>
+
+<aside id="panel">
+  <div class="sec">
+    <button class="close" id="hide" title="Hide panel">✕</button>
+    <h2>Start folder</h2>
+    <div class="row">
+      <input type="text" id="rootIn" class="grow" spellcheck="false" placeholder="/path/to/folder">
+      <button id="scan">Scan</button>
+    </div>
+    <div class="row">
+      <button id="home">Home</button>
+      <span class="muted">Detail</span>
+      <select id="budget">
+        <option value="8000">light</option>
+        <option value="25000" selected>normal</option>
+        <option value="70000">dense</option>
+      </select>
+    </div>
+    <div class="row muted stat" id="status">—</div>
+  </div>
+
+  <div class="sec" id="sel">
+    <h2>Selection</h2>
+    <div class="muted">Hover or click a sphere. Click a folder to dive in; click its empty space again to rise.</div>
+  </div>
+
+  <div class="sec">
+    <h2>Display</h2>
+    <div class="toggles">
+      <label><input type="checkbox" id="optMotion" checked> organic motion</label>
+      <label><input type="checkbox" id="optThreads" checked> activity threads</label>
+      <label><input type="checkbox" id="optReads" checked> show reads</label>
+      <label><input type="checkbox" id="optWrites" checked> show writes</label>
+      <label><input type="checkbox" id="optLabels" checked> labels</label>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <input type="text" id="ignore" class="grow" spellcheck="false" placeholder="ignore paths containing… (comma separated)">
+    </div>
+  </div>
+
+  <div class="sec">
+    <h2>Legend</h2>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="sec" id="logsec">
+    <h2>Live activity</h2>
+    <div id="rates" class="stat"></div>
+    <div id="log"></div>
+  </div>
+</aside>
+
+<script>
+(() => {
+'use strict';
+const $ = s => document.querySelector(s);
+const TAU = Math.PI * 2;
+const WORLD = 1000;        // radius of the start folder in world units
+const PAD = 0.06;          // folder radius = enclosing circle × (1 + PAD)
+const GAP = 0.06;          // siblings are packed as if GAP × r bigger; each may drift within that margin
+const EXPAND_PX = 70;      // fetch a collapsed folder's contents once it is this big on screen
+const LAZY_BUDGET = 3000;
+const PULSE_LIFE = 1.4, THREAD_LIFE = 2.6;
+
+const KIND = {
+  r: { label: 'read',   color: '#22d3ee', mark: 'R' },
+  w: { label: 'write',  color: '#ff9f1c', mark: 'W' },
+  c: { label: 'create', color: '#84e08f', mark: '+' },
+  d: { label: 'delete', color: '#ff5470', mark: '−' },
+};
+
+const CATS = {
+  image:   { color: '#c084fc', ext: 'png jpg jpeg gif webp svg bmp tif tiff heic avif ico psd kra xcf raw cr2 nef dng exr hdr' },
+  video:   { color: '#fb7185', ext: 'mp4 mkv webm mov avi m4v flv wmv mpg mpeg ts' },
+  audio:   { color: '#facc15', ext: 'mp3 flac wav ogg opus m4a aac aiff aif mid midi wv' },
+  code:    { color: '#4ade80', ext: 'js mjs cjs ts tsx jsx py c h cc cpp hpp rs go java kt swift sh bash zsh fish lua rb php html htm css scss vue svelte qml gd cs glsl wgsl' },
+  text:    { color: '#60a5fa', ext: 'md txt rst pdf doc docx odt rtf epub tex org csv xls xlsx ods ppt pptx odp' },
+  config:  { color: '#93c5fd', ext: 'json yml yaml toml ini conf cfg xml plist desktop service lock env' },
+  archive: { color: '#fb923c', ext: 'zip tar gz tgz xz bz2 zst 7z rar iso img deb rpm flatpak appimage whl jar' },
+  model:   { color: '#2dd4bf', ext: 'blend blend1 obj fbx glb gltf stl ply usd usdz abc' },
+  data:    { color: '#a78bfa', ext: 'sqlite sqlite3 db ldb log parquet npy npz pt pth safetensors gguf onnx bin dat pack idx' },
+  binary:  { color: '#94a3b8', ext: 'so o a exe dll pyc wasm class ttf otf woff woff2 pak' },
+  other:   { color: '#cbd5e1', ext: '' },
+};
+const EXT = new Map();
+for (const [cat, v] of Object.entries(CATS)) for (const e of v.ext.split(' ')) if (e) EXT.set(e, cat);
+function category(name) {
+  const i = name.lastIndexOf('.');
+  if (i <= 0) return 'other';
+  return EXT.get(name.slice(i + 1).toLowerCase()) || 'other';
+}
+
+const canvas = $('#c'), ctx = canvas.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+let T = d3.zoomIdentity;
+let root = null, rootPath = '', rootPrefix = '/', gen = -1;
+let frame = 0, dirty = true, hover = null, selected = null, focusNode = null;
+const opts = { motion: true, threads: true, reads: true, writes: true, labels: true };
+let ignore = [];
+
+// ------------------------------------------------------------ tree model
+
+function hashHue(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return ((h >>> 0) % 360);
+}
+
+function build(j, parent) {
+  const n = {
+    name: j.n, kind: j.k, size: j.s, count: j.m || 0, parent, children: null,
+    r: 0, dx: 0, dy: 0, slack: 0, heat: 0,
+    ph1: Math.random() * TAU, ph2: Math.random() * TAU,
+    w1: 0.22 + Math.random() * 0.4, w2: 0.22 + Math.random() * 0.4,
+  };
+  n.hue = !parent ? 210 : !parent.parent ? hashHue(n.name) : parent.hue;
+  n.cat = n.kind === 'f' ? category(n.name) : null;
+  paint(n);
+  if (j.c) setChildren(n, j.c.map(c => build(c, n)));
+  return n;
+}
+
+function paint(n) {
+  const h = n.hue;
+  if (n.kind === 'f') { n.fill = CATS[n.cat].color; n.stroke = 'rgba(0,0,0,.35)'; }
+  else if (n.kind === 'o') { n.fill = 'rgba(150,160,175,.22)'; n.stroke = 'rgba(170,180,195,.5)'; }
+  else if (n.kind === 'c') { n.fill = `hsla(${h},45%,58%,.16)`; n.stroke = `hsla(${h},50%,68%,.55)`; }
+  else { n.fill = `hsla(${h},40%,55%,.045)`; n.stroke = `hsla(${h},45%,66%,.42)`; }
+}
+
+function setChildren(n, kids) {
+  n.children = kids;
+  n.byName = new Map();
+  n.others = null;
+  for (const c of kids) { if (c.kind === 'o') n.others = c; else n.byName.set(c.name, c); }
+}
+
+// radii in sqrt(bytes) units: file area ∝ size, folders enclose their children
+function measure(n) {
+  if (n.children && n.children.length) {
+    for (const c of n.children) { measure(c); c.r *= 1 + GAP; }
+    d3.packSiblings(n.children);
+    const e = d3.packEnclose(n.children);
+    for (const c of n.children) { c.r /= 1 + GAP; c.dx = c.x - e.x; c.dy = c.y - e.y; }
+    n.r = e.r * (1 + PAD);
+  } else {
+    n.r = Math.sqrt(n.size) * (n.kind === 'c' ? 1.2 : 1);
+  }
+}
+function scaleTree(n, k) {
+  n.r *= k; n.dx *= k; n.dy *= k;
+  if (n.children) for (const c of n.children) scaleTree(c, k);
+}
+function settle(n) {
+  if (!n.children) return;
+  for (const c of n.children) {
+    c.slack = Math.max(0, n.r - Math.hypot(c.dx, c.dy) - c.r);
+    settle(c);
+  }
+}
+function layoutInto(n, radius) {
+  measure(n);
+  const k = radius / n.r;
+  n.r = radius;
+  if (n.children) for (const c of n.children) scaleTree(c, k);
+  settle(n);
+}
+
+function pathOf(n) {
+  const parts = [];
+  for (let m = n.kind === 'o' ? n.parent : n; m && m.parent; m = m.parent) parts.push(m.name);
+  return parts.length ? rootPrefix + parts.reverse().join('/') : rootPath;
+}
+
+// deepest loaded circle for a path: the file, the "+N smaller" circle, or the nearest folder
+function resolve(path) {
+  if (!root) return null;
+  if (path !== rootPath && !path.startsWith(rootPrefix)) return null;
+  const rel = path === rootPath ? '' : path.slice(rootPrefix.length);
+  const parts = rel ? rel.split('/') : [];
+  let n = root;
+  for (let i = 0; i < parts.length; i++) {
+    if (!n.children) break;
+    const c = n.byName.get(parts[i]);
+    if (!c) return (i === parts.length - 1 && n.others) ? n.others : n;
+    n = c;
+  }
+  return n;
+}
+
+// ------------------------------------------------------------ loading
+
+let inflight = 0;
+function expand(n) {
+  if (n.loading || n.failed || inflight >= 3) return;
+  n.loading = true; inflight++;
+  const myGen = gen;
+  fetch(`/api/tree?budget=${LAZY_BUDGET}&path=${encodeURIComponent(pathOf(n))}`)
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(j => {
+      if (myGen !== gen || n.kind !== 'c') return;
+      n.kind = 'd'; paint(n);
+      setChildren(n, (j.c || []).map(c => build(c, n)));
+      const R = n.r;
+      layoutInto(n, R);
+      dirty = true;
+    })
+    .catch(() => { n.failed = true; })
+    .finally(() => { n.loading = false; inflight--; });
+}
+
+async function status() { return (await fetch('/api/status')).json(); }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function waitAndLoad() {
+  root = null; hover = selected = focusNode = null; showSel(null); dirty = true;
+  let st;
+  for (;;) {
+    try { st = await status(); } catch { overlay('Server not reachable', 'start it with: python3 aristarkus.py'); await sleep(1500); continue; }
+    $('#rootIn').value = $('#rootIn').value || st.root;
+    showStatus(st);
+    if (!st.scanning) break;
+    overlay(`Scanning ${st.root}`, `${fmtInt(st.files)} files · ${fmtInt(st.dirs)} folders · ${fmtBytes(st.bytes)}`);
+    await sleep(400);
+  }
+  overlay('Laying out…', '');
+  const budget = +$('#budget').value;
+  const j = await (await fetch(`/api/tree?budget=${budget}&path=${encodeURIComponent(st.root)}`)).json();
+  rootPath = st.root; rootPrefix = rootPath.endsWith('/') ? rootPath : rootPath + '/';
+  gen = st.gen;
+  $('#rootIn').value = rootPath;
+  const r = build(j, null);
+  r.name = rootPath;
+  layoutInto(r, WORLD);
+  root = r; focusNode = root;
+  overlay(null);
+  fitRoot(false);
+  showStatus(st);
+  crumbs();
+}
+
+async function setRoot(path) {
+  const res = await fetch('/api/root', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) });
+  const j = await res.json();
+  if (!res.ok) { $('#status').innerHTML = `<span class="err">${esc(j.error)}</span>`; return; }
+  $('#rootIn').value = j.root;
+  waitAndLoad();
+}
+
+function showStatus(st) {
+  let live;
+  if (!st.watches && st.watchError) live = `<span class="err">no live activity: ${esc(st.watchError)}</span>`;
+  else {
+    live = `${fmtInt(st.watches)} folders watched`;
+    if (st.watchFailed) live += ` · <span class="err" title="${esc(st.watchError || '')}">${fmtInt(st.watchFailed)} unwatched</span>`;
+    if (!st.reads) live += '<br><span class="muted">this system reports changes, not reads</span>';
+  }
+  $('#status').innerHTML = `${fmtInt(st.files)} files · ${fmtInt(st.dirs)} folders · ${fmtBytes(st.bytes)}<br>${live}`;
+  $('#status').title = `Aristarkus ${st.version} · ${st.platform} · live activity: ${st.watchMode}`;
+  $('#optReads').disabled = !st.reads;
+}
+setInterval(async () => { if (root) try { showStatus(await status()); } catch {} }, 5000);
+
+// ------------------------------------------------------------ positions + motion
+
+// any two siblings sit at least GAP × (r1 + r2) apart, so drifting by at most GAP × r each
+// never makes them touch; the 1/√2 keeps the combined x/y swing within that radius
+function wob(c, t) {
+  if (!opts.motion) return [0, 0];
+  const a = Math.min(c.slack, c.r * GAP) * Math.SQRT1_2;
+  const f = 1 + c.heat * 3;
+  return [a * Math.sin(t * c.w1 * f + c.ph1), a * Math.cos(t * c.w2 * f + c.ph2)];
+}
+
+// world position of any node at time t, whether or not it was drawn this frame
+function livePos(n, t) {
+  if (n._f === frame) return [n._x, n._y];
+  const chain = [];
+  for (let m = n; m.parent; m = m.parent) chain.push(m);
+  let x = 0, y = 0;
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const c = chain[i], [ox, oy] = wob(c, t);
+    x += c.dx + ox; y += c.dy + oy;
+  }
+  return [x, y];
+}
+
+// ------------------------------------------------------------ render
+
+const labels = [];
+let lastT = 0;
+
+function resize() {
+  DPR = window.devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+  dirty = true;
+}
+
+function drawNode(n, x, y, t) {
+  const k = T.k, sr = n.r * k, sx = x * k + T.x, sy = y * k + T.y;
+  if (sr < 0.4 || sx + sr < 0 || sy + sr < 0 || sx - sr > W || sy - sr > H) return;
+  n._x = x; n._y = y; n._f = frame;
+
+  ctx.beginPath();
+  ctx.arc(sx, sy, sr, 0, TAU);
+  if (n.kind === 'f') {
+    ctx.globalAlpha = 0.82;
+    ctx.fillStyle = n.fill; ctx.fill();
+    ctx.globalAlpha = 1;
+    if (sr > 4) { ctx.strokeStyle = n.stroke; ctx.lineWidth = 1; ctx.stroke(); }
+  } else {
+    ctx.fillStyle = n.fill; ctx.fill();
+    if (sr > 1.5) {
+      ctx.strokeStyle = n.stroke; ctx.lineWidth = 1;
+      if (n.kind !== 'd' && sr > 6) ctx.setLineDash([3, 3]);
+      if (n.loading) ctx.globalAlpha = 0.4 + 0.4 * Math.sin(t * 8);
+      ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+    }
+  }
+  if (n === hover || n === selected) {
+    ctx.strokeStyle = n === selected ? '#fff' : 'rgba(255,255,255,.6)';
+    ctx.lineWidth = n === selected ? 2 : 1.5;
+    ctx.stroke();
+  }
+  if (n.kind === 'c' && sr > EXPAND_PX) expand(n);
+  if (opts.labels && sr > (n.kind === 'f' ? 28 : 34)) labels.push([n, sx, sy, sr]);
+
+  if (n.children && sr > 3) {
+    for (const c of n.children) {
+      const [ox, oy] = wob(c, t);
+      drawNode(c, x + c.dx + ox, y + c.dy + oy, t);
+    }
+  }
+}
+
+function fit(text, maxW) {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let lo = 0, hi = text.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (ctx.measureText(text.slice(0, mid) + '…').width <= maxW) lo = mid; else hi = mid - 1;
+  }
+  return lo ? text.slice(0, lo) + '…' : '';
+}
+
+// nested folders put their names at nearly the same spot; keep the outermost
+const placed = [];
+function place(text, x, y, fs) {
+  const w = ctx.measureText(text).width / 2 + 2, h = fs * 0.65;
+  for (const [x0, y0, w0, h0] of placed) if (Math.abs(x - x0) < w + w0 && Math.abs(y - y0) < h + h0) return false;
+  placed.push([x, y, w, h]);
+  return true;
+}
+
+function drawLabels() {
+  placed.length = 0;
+  labels.sort((a, b) => b[3] - a[3]);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.shadowColor = 'rgba(0,0,0,.9)'; ctx.shadowBlur = 4;
+  const max = Math.min(labels.length, 140);
+  for (let i = 0; i < max; i++) {
+    const [n, sx, sy, sr] = labels[i];
+    const isFile = n.kind === 'f' || n.kind === 'o';
+    const fs = Math.max(10, Math.min(15, sr * (isFile ? 0.2 : 0.11)));
+    ctx.font = `${isFile ? 400 : 600} ${fs}px ui-sans-serif, system-ui, sans-serif`;
+    const name = n === root ? rootPath : n.name;
+    if (isFile) {
+      const s = fit(name, sr * 1.7);
+      if (!s || !place(s, sx, sy, fs)) continue;
+      ctx.fillStyle = 'rgba(10,12,15,.92)';
+      ctx.fillText(s, sx, sy);
+    } else {
+      const ly = sy - sr + fs * 1.3;
+      const s = fit(name, sr * 1.1);
+      if (!s || !place(s, sx, ly, fs)) continue;
+      ctx.fillStyle = `hsla(${n.hue},55%,82%,.95)`;
+      ctx.fillText(s, sx, ly);
+      if (sr > 120) {
+        ctx.font = `400 ${Math.max(9, fs * 0.8)}px ui-sans-serif, system-ui, sans-serif`;
+        ctx.fillStyle = 'rgba(200,208,218,.6)';
+        ctx.fillText(fmtBytes(n.size), sx, ly + fs * 1.15);
+      }
+    }
+  }
+  ctx.shadowBlur = 0;
+}
+
+// ------------------------------------------------------------ activity
+
+const pulses = [], threads = [], heated = new Set();
+let lastNode = null, threadFlip = 1;
+
+function pulse(n, kind, count, t) {
+  const p0 = n._pulse;
+  if (p0 && p0.kind === kind && t - p0.t0 < 0.3) { p0.count += count; }
+  else {
+    const p = { n, kind, count, t0: t };
+    n._pulse = p;
+    pulses.push(p);
+    if (pulses.length > 1500) pulses.splice(0, pulses.length - 1500);
+  }
+  n.heat = 1; heated.add(n);
+  if (opts.threads && lastNode && lastNode !== n) {
+    threads.push({ a: lastNode, b: n, kind, t0: t, bend: (threadFlip = -threadFlip) * (0.15 + Math.random() * 0.25) });
+    if (threads.length > 260) threads.splice(0, threads.length - 260);
+  }
+  lastNode = n;
+}
+
+function drawThreads(t) {
+  ctx.lineCap = 'round';
+  for (let i = threads.length - 1; i >= 0; i--) {
+    const th = threads[i], age = (t - th.t0) / THREAD_LIFE;
+    if (age >= 1 || !opts.threads) { threads.splice(i, 1); continue; }
+    const [ax, ay] = livePos(th.a, t), [bx, by] = livePos(th.b, t);
+    const x1 = ax * T.k + T.x, y1 = ay * T.k + T.y, x2 = bx * T.k + T.x, y2 = by * T.k + T.y;
+    const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, dx = x2 - x1, dy = y2 - y1;
+    const cx = mx - dy * th.bend, cy = my + dx * th.bend;
+    // the thread grows from a to b, then fades
+    const grow = Math.min(1, age * 4);
+    ctx.globalAlpha = 0.55 * (1 - age) ** 1.4;
+    ctx.strokeStyle = KIND[th.kind].color;
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    if (grow >= 1) ctx.quadraticCurveTo(cx, cy, x2, y2);
+    else {
+      // partial quadratic via de Casteljau
+      const qx = x1 + (cx - x1) * grow, qy = y1 + (cy - y1) * grow;
+      const rx = cx + (x2 - cx) * grow, ry = cy + (y2 - cy) * grow;
+      ctx.quadraticCurveTo(qx, qy, qx + (rx - qx) * grow, qy + (ry - qy) * grow);
+    }
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawPulses(t) {
+  for (let i = pulses.length - 1; i >= 0; i--) {
+    const p = pulses[i], age = (t - p.t0) / PULSE_LIFE;
+    if (age >= 1) { pulses.splice(i, 1); if (p.n._pulse === p) p.n._pulse = null; continue; }
+    const [x, y] = livePos(p.n, t);
+    const sx = x * T.k + T.x, sy = y * T.k + T.y;
+    const sr = Math.max(p.n.r * T.k, 2.5);
+    if (sx + sr + 40 < 0 || sy + sr + 40 < 0 || sx - sr - 40 > W || sy - sr - 40 > H) continue;
+    const e = 1 - (1 - age) ** 3;
+    const col = KIND[p.kind].color;
+    const boost = Math.min(1, 0.5 + Math.log10(1 + p.count) * 0.4);
+    if (age < 0.35) {
+      ctx.globalAlpha = 0.35 * (1 - age / 0.35) * boost;
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(sx, sy, sr, 0, TAU); ctx.fill();
+    }
+    ctx.globalAlpha = (1 - age) ** 1.5 * boost;
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 0.6 + 1.8 * (1 - age);
+    ctx.beginPath(); ctx.arc(sx, sy, sr + (5 + Math.min(sr, 120) * 0.35) * e, 0, TAU); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function coolDown(dt) {
+  for (const n of heated) {
+    n.heat = Math.max(0, n.heat - dt * 0.6);
+    if (!n.heat) heated.delete(n);
+  }
+}
+
+// event stream
+const logItems = [];
+const rate = { r: 0, w: 0, c: 0, d: 0 }, shown = { r: 0, w: 0, c: 0, d: 0 };
+let logDirty = false, dropped = 0, overflowed = false;
+
+function connect() {
+  const es = new EventSource('/api/events');
+  es.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    const t = performance.now() / 1000;
+    dropped += m.drop || 0;
+    if (m.overflow) overflowed = true;
+    for (const [kind, path, count] of m.e) {
+      rate[kind] += count;
+      if (kind === 'r' ? !opts.reads : !opts.writes) continue;
+      if (ignore.length && ignore.some(s => path.includes(s))) continue;
+      logItems.push([kind, path, count]);
+      logDirty = true;
+      const n = resolve(path);
+      if (n) pulse(n, kind, count, t);
+    }
+    if (logItems.length > 200) logItems.splice(0, logItems.length - 200);
+  };
+}
+
+setInterval(() => {
+  Object.assign(shown, rate);
+  for (const k in rate) rate[k] = 0;
+  const extra = (dropped ? ` · ${fmtInt(dropped)} merged` : '') + (overflowed ? ' · <span class="err">queue overflow</span>' : '');
+  $('#rates').innerHTML = Object.entries(KIND).map(([k, v]) => `<span style="color:${v.color}"><b>${fmtInt(shown[k])}</b>/s ${v.label}</span>`).join('') + `<span class="muted">${extra}</span>`;
+  dropped = 0; overflowed = false;
+}, 1000);
+
+setInterval(() => {
+  if (!logDirty) return;
+  logDirty = false;
+  const rows = logItems.slice(-60).reverse();
+  $('#log').innerHTML = rows.map(([k, p, c]) => {
+    const rel = p.startsWith(rootPrefix) ? p.slice(rootPrefix.length) : p;
+    return `<div data-p="${esc(p)}" title="${esc(p)}"><span class="k" style="color:${KIND[k].color}">${KIND[k].mark}</span><span class="p">&lrm;${esc(rel)}&lrm;</span>${c > 1 ? `<span class="n">×${c}</span>` : ''}</div>`;
+  }).join('');
+}, 250);
+
+$('#log').addEventListener('click', e => {
+  const row = e.target.closest('[data-p]');
+  if (!row) return;
+  const n = resolve(row.dataset.p);
+  if (n) { select(n); zoomTo(n.children ? n : n.parent || n); }
+});
+
+// ------------------------------------------------------------ main loop
+
+let lastRaf = 0;
+function loop(now) {
+  lastRaf = performance.now();
+  requestAnimationFrame(loop);
+  tick(now);
+}
+// background panes may never fire requestAnimationFrame; keep drawing at a low rate there
+setInterval(() => { if (performance.now() - lastRaf > 300) tick(performance.now()); }, 100);
+
+function tick(now) {
+  const t = now / 1000, dt = Math.min(0.1, t - lastT);
+  lastT = t;
+  coolDown(dt);
+  if (!root) {
+    if (dirty) { ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.fillStyle = '#0a0c0f'; ctx.fillRect(0, 0, W, H); dirty = false; }
+    return;
+  }
+  if (!opts.motion && !pulses.length && !threads.length && !heated.size && !dirty && !inflight) return;
+  dirty = false;
+  frame++;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.fillStyle = '#0a0c0f';
+  ctx.fillRect(0, 0, W, H);
+  labels.length = 0;
+  drawNode(root, 0, 0, t);
+  drawThreads(t);
+  drawPulses(t);
+  drawLabels();
+}
+
+// ------------------------------------------------------------ interaction
+
+const zoom = d3.zoom()
+  .scaleExtent([0.1, 1e10])
+  .on('zoom', e => { T = e.transform; dirty = true; });
+d3.select(canvas).call(zoom).on('dblclick.zoom', null);
+
+function viewBox() {
+  const panelOpen = !$('#panel').classList.contains('hidden') && W > 720;
+  const w = panelOpen ? W - 360 : W;
+  return { cx: w / 2, cy: H / 2 + 14, size: Math.min(w, H - 40) };
+}
+
+function fitRoot(animate) { zoomTo(root, animate); }
+
+function zoomTo(n, animate = true) {
+  if (!n) return;
+  focusNode = n;
+  const [x, y] = livePos(n, performance.now() / 1000);
+  const v = viewBox();
+  const k = v.size / (2 * n.r * 1.08);
+  const target = d3.zoomIdentity.translate(v.cx - x * k, v.cy - y * k).scale(k);
+  const sel = d3.select(canvas);
+  if (animate) sel.transition().duration(850).ease(d3.easeCubicInOut).call(zoom.transform, target);
+  else sel.call(zoom.transform, target);
+  crumbs();
+}
+
+function pick(mx, my) {
+  if (!root || root._f !== frame) return null;
+  const wx = (mx - T.x) / T.k, wy = (my - T.y) / T.k;
+  if ((wx - root._x) ** 2 + (wy - root._y) ** 2 > root.r ** 2) return null;
+  let n = root;
+  outer: while (n.children) {
+    for (let i = n.children.length - 1; i >= 0; i--) {
+      const c = n.children[i];
+      if (c._f === frame && (wx - c._x) ** 2 + (wy - c._y) ** 2 <= c.r * c.r) { n = c; continue outer; }
+    }
+    break;
+  }
+  return n;
+}
+
+let downAt = null;
+canvas.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; });
+canvas.addEventListener('pointermove', e => {
+  const n = e.buttons ? null : pick(e.clientX, e.clientY);
+  if (n !== hover) { hover = n; dirty = true; }
+  const tip = $('#tip');
+  if (!n) { tip.style.display = 'none'; return; }
+  tip.innerHTML = describe(n, true);
+  tip.style.display = 'block';
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  tip.style.left = Math.min(e.clientX + 14, W - tw - 8) + 'px';
+  tip.style.top = Math.min(e.clientY + 14, H - th - 8) + 'px';
+});
+canvas.addEventListener('pointerleave', () => { hover = null; $('#tip').style.display = 'none'; dirty = true; });
+canvas.addEventListener('click', e => {
+  if (downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return;
+  const n = pick(e.clientX, e.clientY);
+  if (!n) { if (root) zoomTo(root); return; }
+  select(n);
+  if (n.kind === 'd' || n.kind === 'c') zoomTo(n === focusNode && n.parent ? n.parent : n);
+});
+
+function select(n) { selected = n; dirty = true; showSel(n); }
+
+function describe(n, short) {
+  const kind = { f: CATS[n.cat] ? n.cat + ' file' : 'file', d: 'folder', c: 'folder', o: 'small files' }[n.kind];
+  const count = n.kind === 'f' ? '' : ` · ${fmtInt(n.count || (n.children ? n.children.length : 0))} files`;
+  const name = n === root ? rootPath : n.name;
+  return short
+    ? `<b>${esc(name)}</b><br><span class="muted">${fmtBytes(n.size)} · ${kind}${count}</span>`
+    : `<div class="name">${esc(name)}</div><div class="path">${esc(pathOf(n))}</div><div class="stat">${fmtBytes(n.size)} · ${kind}${count}</div>`;
+}
+
+function showSel(n) {
+  const box = $('#sel');
+  if (!n) { box.innerHTML = '<h2>Selection</h2><div class="muted">Hover or click a sphere. Click a folder to dive in; click its empty space again to rise.</div>'; return; }
+  const isDir = n.kind === 'd' || n.kind === 'c';
+  box.innerHTML = `<h2>Selection</h2>${describe(n, false)}<div class="btns">
+    ${isDir ? '<button data-a="zoom">Zoom here</button><button data-a="root">Start from here</button>' : '<button data-a="up">Show folder</button>'}
+    <button data-a="copy">Copy path</button></div>`;
+  box.querySelector('.btns').onclick = e => {
+    const a = e.target.dataset.a;
+    if (a === 'zoom') zoomTo(n);
+    if (a === 'up') zoomTo(n.parent || root);
+    if (a === 'root') setRoot(pathOf(n));
+    if (a === 'copy') navigator.clipboard?.writeText(pathOf(n));
+  };
+}
+
+function crumbs() {
+  const el = $('#crumbs');
+  if (!focusNode) { el.innerHTML = ''; return; }
+  const chain = [];
+  for (let m = focusNode; m; m = m.parent) chain.unshift(m);
+  el.innerHTML = '';
+  chain.forEach((m, i) => {
+    if (i) el.insertAdjacentHTML('beforeend', '<span>/</span>');
+    const a = document.createElement('a');
+    a.textContent = m === root ? rootPath : m.name;
+    a.onclick = () => zoomTo(m);
+    el.appendChild(a);
+  });
+}
+
+// ------------------------------------------------------------ controls
+
+$('#scan').onclick = () => setRoot($('#rootIn').value.trim());
+$('#rootIn').addEventListener('keydown', e => { if (e.key === 'Enter') setRoot($('#rootIn').value.trim()); });
+$('#home').onclick = async () => setRoot((await status()).home);
+$('#budget').onchange = () => { if (rootPath) setRoot(rootPath); };
+for (const [id, key] of [['optMotion', 'motion'], ['optThreads', 'threads'], ['optReads', 'reads'], ['optWrites', 'writes'], ['optLabels', 'labels']]) {
+  $('#' + id).onchange = e => { opts[key] = e.target.checked; dirty = true; };
+}
+$('#ignore').oninput = e => { ignore = e.target.value.split(',').map(s => s.trim()).filter(Boolean); };
+$('#hide').onclick = () => { $('#panel').classList.add('hidden'); $('#toggle').style.display = 'block'; dirty = true; };
+$('#toggle').onclick = () => { $('#panel').classList.remove('hidden'); $('#toggle').style.display = 'none'; dirty = true; };
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'Escape' && focusNode && focusNode.parent) zoomTo(focusNode.parent);
+});
+
+$('#legend').innerHTML =
+  Object.entries(CATS).map(([k, v]) => `<span><i style="background:${v.color}"></i>${k}</span>`).join('') +
+  '<span><i style="background:hsla(210,45%,58%,.35);border:1px dashed hsla(210,50%,68%,.8)"></i>folder (zoom to open)</span>' +
+  Object.values(KIND).map(v => `<span><i class="ring" style="border-color:${v.color}"></i>${v.label}</span>`).join('');
+
+// ------------------------------------------------------------ utils
+
+function overlay(title, sub) {
+  const o = $('#overlay');
+  if (!title) { o.style.display = 'none'; return; }
+  o.style.display = 'flex';
+  o.querySelector('strong').textContent = title;
+  $('#ovsub').textContent = sub || '';
+}
+function fmtBytes(b) {
+  if (!b) return '0 B';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  const i = Math.min(u.length - 1, Math.floor(Math.log(b) / Math.log(1024)));
+  const v = b / 1024 ** i;
+  return (v >= 100 || i === 0 ? v.toFixed(0) : v.toFixed(1)) + ' ' + u[i];
+}
+function fmtInt(n) { return (n || 0).toLocaleString('en-US'); }
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+addEventListener('resize', resize);
+resize();
+connect();
+waitAndLoad();
+requestAnimationFrame(loop);
+window.aristarkus = { get T() { return T; }, get root() { return root; }, get frame() { return frame; } };  // console handle
+})();
+</script>
+</body>
+</html>

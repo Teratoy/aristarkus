@@ -6,11 +6,11 @@ for changes, and serves:
 
   /               the page (web/index.html)
   /api/status     scan progress + current start folder
-  /api/root       POST {"path": ...} to rescan from another folder
+  /api/root       POST ?path=  rescan from another folder
   /api/tree       ?path=&budget=  subtree, biggest folders expanded first
   /api/events     server-sent events: batches of [kind, path, count]
                   kind: r=read w=write c=create d=delete
-  /api/log        POST from the page: browser-side errors go to the debug log
+  /api/log        POST ?message=  browser-side errors go to the debug log
 
 Live activity: Linux uses inotify (reads and writes). Windows uses
 ReadDirectoryChangesW, which reports changes but not reads. Elsewhere the map is static.
@@ -37,7 +37,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-__version__ = '0.1.2'
+__version__ = '0.1.3'
 
 FROZEN = getattr(sys, 'frozen', False)
 WEB = os.path.join(getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__))), 'web')
@@ -559,9 +559,6 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj, code=200):
         self._send(json.dumps(obj, separators=(',', ':')).encode(), 'application/json', code)
 
-    def _body(self):
-        return json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))) or b'{}')
-
     def do_GET(self):
         if not self._local():
             return
@@ -593,13 +590,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._local():
             return
-        path = urlparse(self.path).path
+        # parameters go in the URL: the Android app's WebView can't read request bodies, and the
+        # page is the same everywhere
+        url = urlparse(self.path)
+        path, q = url.path, parse_qs(url.query)
         try:
             if path == '/api/root':
-                self._json({'root': web_path(STATE.set_root(os_path(self._body().get('path') or '~')))})
+                self._json({'root': web_path(STATE.set_root(os_path(q.get('path', ['~'])[0])))})
             elif path == '/api/log':
-                body = self._body()
-                log.warning('page: %s', str(body.get('message', ''))[:2000])
+                log.warning('page: %s', q.get('message', [''])[0][:2000])
                 self._json({})
             else:
                 self.send_error(404)

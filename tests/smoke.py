@@ -108,6 +108,20 @@ def check(program, port):
                     seen.add((k, rel))
         assert not want - seen, f'missing events: {want - seen}'
 
+        def post(path):
+            req = urllib.request.Request(base + path, method='POST')
+            return json.loads(urllib.request.urlopen(req, timeout=10).read())
+
+        post('/api/log?message=' + urllib.request.quote('smoke test'))
+        sub = st['root'] + '/sub'
+        assert post('/api/root?path=' + urllib.request.quote(sub))['root'] == sub
+        for _ in range(100):
+            st2 = json.loads(get(base + '/api/status', 2))
+            if not st2['scanning']:
+                break
+            time.sleep(0.1)
+        assert st2['root'] == sub and st2['files'] == 3, st2     # b.png, c.mp3, new.txt
+
         if program.endswith('-debug') or program.endswith('-debug.exe'):
             logfile = os.path.join(os.path.dirname(os.path.abspath(program)), 'aristarkus-debug.log')
             assert os.path.exists(logfile), 'debug build wrote no aristarkus-debug.log'

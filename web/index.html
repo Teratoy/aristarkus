@@ -9,7 +9,7 @@
 <script>
   // send page errors to the server so they land in aristarkus-debug.log
   (() => {
-    const report = message => fetch('/api/log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) }).catch(() => {});
+    const report = message => fetch(`/api/log?message=${encodeURIComponent(String(message).slice(0, 2000))}`, { method: 'POST' }).catch(() => {});
     addEventListener('error', e => report(`${e.message} at ${e.filename}:${e.lineno}:${e.colno}`));
     addEventListener('unhandledrejection', e => report(`unhandled rejection: ${e.reason && (e.reason.stack || e.reason)}`));
   })();
@@ -103,7 +103,7 @@
       var(--bg);
   }
   canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
-  button, input, select { font: inherit; letter-spacing: inherit; }
+  button, input { font: inherit; letter-spacing: inherit; }
 
   .btn {
     color: var(--fg);
@@ -139,7 +139,7 @@
   }
   .icon-btn svg { width: 18px; height: 18px; fill: currentColor; }
 
-  input[type=text], select {
+  input[type=text] {
     min-width: 0;
     background: rgba(var(--bg-rgb), 0.45);
     color: var(--fg);
@@ -150,13 +150,32 @@
     text-shadow: none;
     transition: var(--transition);
   }
-  input[type=text]:focus, select:focus {
+  input[type=text]:focus {
     outline: none;
     border-color: rgba(var(--fg-rgb), 0.55);
     box-shadow: 0 0 0 3px rgba(var(--fg-rgb), 0.08);
   }
   input::placeholder { color: rgba(var(--fg-rgb), 0.45); }
-  option { background: rgb(var(--panel-rgb)); color: var(--fg); }
+  .seg {
+    display: inline-flex;
+    padding: 2px;
+    background: rgba(var(--bg-rgb), 0.45);
+    border: 1px solid rgba(var(--fg-rgb), 0.22);
+    border-radius: 20px;
+  }
+  .seg label {
+    position: relative;
+    padding: 6px 8px;
+    border-radius: 18px;
+    font-size: 13px;
+    color: rgba(var(--fg-rgb), 0.7);
+    cursor: pointer;
+    transition: var(--transition);
+  }
+  .seg input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; }
+  .seg label:hover { color: var(--fg); background: rgba(var(--fg-rgb), 0.1); }
+  .seg label:has(input:focus-visible) { box-shadow: 0 0 0 3px rgba(var(--fg-rgb), 0.25); }
+  .seg label:has(input:checked) { color: var(--bg); background: var(--fg); text-shadow: none; }
   input[type=checkbox] { accent-color: var(--fg); width: 16px; height: 16px; margin: 0; }
 
   .glass {
@@ -218,6 +237,7 @@
   .sec-head .icon-btn { width: 32px; height: 32px; margin: -6px -8px -6px 0; }
   .row { display: flex; gap: 8px; align-items: center; }
   .row + .row { margin-top: 8px; }
+  .row:has(.seg) { flex-wrap: wrap; }
   .grow { flex: 1; }
   .muted { color: rgba(var(--fg-rgb), 0.55); }
   .meta { font-size: 12px; color: rgba(var(--fg-rgb), 0.55); }
@@ -256,7 +276,9 @@
   }
   #tip b { color: var(--fg); word-break: break-all; }
   #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
-  #overlay div { text-align: center; color: rgba(var(--fg-rgb), 0.55); }
+  #overlay div { text-align: center; color: rgba(var(--fg-rgb), 0.55); max-width: min(420px, 88vw); }
+  #grant { display: block; margin: 14px auto 0; pointer-events: auto; border-color: rgba(var(--fg-rgb), 0.3); }
+  #grant[hidden] { display: none; }
   #overlay strong { display: block; color: var(--fg); font-size: 20px; font-weight: 700; margin-bottom: 4px; filter: var(--title-glow); }
   #toggle {
     position: fixed;
@@ -360,7 +382,7 @@
   <nav id="crumbs" aria-label="Current folder"></nav>
 </div>
 
-<div id="overlay" role="status" aria-live="polite"><div><strong>Connecting…</strong><span id="ovsub"></span></div></div>
+<div id="overlay" role="status" aria-live="polite"><div><strong>Connecting…</strong><span id="ovsub"></span><button class="btn" id="grant" hidden>Allow access</button></div></div>
 <div id="tip" class="glass"></div>
 <button id="toggle" class="btn icon-btn" hidden aria-label="Show panel" title="Show panel">
   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
@@ -381,12 +403,14 @@
     <div class="row">
       <button class="btn" id="home">Home</button>
       <span class="grow"></span>
-      <label class="muted" for="budget">detail</label>
-      <select id="budget">
-        <option value="8000">light</option>
-        <option value="25000" selected>normal</option>
-        <option value="70000">dense</option>
-      </select>
+      <div class="row">
+        <span class="muted" id="budgetLabel">detail</span>
+        <div class="seg" id="budget" role="radiogroup" aria-labelledby="budgetLabel">
+          <label><input type="radio" name="budget" value="8000">light</label>
+          <label><input type="radio" name="budget" value="25000" checked>normal</label>
+          <label><input type="radio" name="budget" value="70000">dense</label>
+        </div>
+      </div>
     </div>
     <div class="meta stat" id="status" role="status" aria-live="polite">—</div>
   </div>
@@ -428,6 +452,8 @@
 'use strict';
 const $ = s => document.querySelector(s);
 const TAU = Math.PI * 2;
+const ANDROID = location.hostname === 'appassets.androidplatform.net';   // inside the Android app
+const POLL_MS = 250;       // the app has no event stream, so the page asks for new activity instead
 const WORLD = 1000;        // radius of the start folder in world units
 const PAD = 0.06;          // folder radius = enclosing circle × (1 + PAD)
 const GAP = 0.06;          // siblings are packed as if GAP × r bigger; each may drift within that margin
@@ -598,6 +624,14 @@ async function waitAndLoad() {
   let st;
   for (;;) {
     try { st = await status(); } catch { overlay("Can't reach the server.", 'start it with: python3 aristarkus.py'); await sleep(1500); continue; }
+    if (st.needsPermission) {
+      overlay('I need to see your files.', "Android asks you to allow access to all files. Nothing leaves this device: the app doesn't even have internet permission.");
+      $('#grant').hidden = false;
+      await sleep(600);
+      continue;
+    }
+    $('#grant').hidden = true;
+    if (!st.root) { await sleep(200); continue; }
     $('#rootIn').value = $('#rootIn').value || st.root;
     showStatus(st);
     if (!st.scanning) break;
@@ -605,7 +639,7 @@ async function waitAndLoad() {
     await sleep(400);
   }
   overlay('Laying out…', '');
-  const budget = +$('#budget').value;
+  const budget = +$('#budget input:checked').value;
   const j = await (await fetch(`/api/tree?budget=${budget}&path=${encodeURIComponent(st.root)}`)).json();
   rootPath = st.root; rootPrefix = rootPath.endsWith('/') ? rootPath : rootPath + '/';
   gen = st.gen;
@@ -621,7 +655,7 @@ async function waitAndLoad() {
 }
 
 async function setRoot(path) {
-  const res = await fetch('/api/root', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) });
+  const res = await fetch(`/api/root?path=${encodeURIComponent(path)}`, { method: 'POST' });
   const j = await res.json();
   if (!res.ok) { $('#status').innerHTML = `<span class="err">${esc(j.error)}</span>`; return; }
   $('#rootIn').value = j.root;
@@ -859,24 +893,32 @@ const logItems = [];
 const rate = { r: 0, w: 0, c: 0, d: 0 }, shown = { r: 0, w: 0, c: 0, d: 0 };
 let logDirty = false, dropped = 0, overflowed = false;
 
+function onBatch(m) {
+  const t = performance.now() / 1000;
+  dropped += m.drop || 0;
+  if (m.overflow) overflowed = true;
+  for (const [kind, path, count] of m.e) {
+    rate[kind] += count;
+    if (kind === 'r' ? !opts.reads : !opts.writes) continue;
+    if (ignore.length && ignore.some(s => path.includes(s))) continue;
+    logItems.push([kind, path, count]);
+    logDirty = true;
+    const n = resolve(path);
+    if (n) pulse(n, kind, count, t);
+  }
+  if (logItems.length > 200) logItems.splice(0, logItems.length - 200);
+}
+
 function connect() {
-  const es = new EventSource('/api/events');
-  es.onmessage = ev => {
-    const m = JSON.parse(ev.data);
-    const t = performance.now() / 1000;
-    dropped += m.drop || 0;
-    if (m.overflow) overflowed = true;
-    for (const [kind, path, count] of m.e) {
-      rate[kind] += count;
-      if (kind === 'r' ? !opts.reads : !opts.writes) continue;
-      if (ignore.length && ignore.some(s => path.includes(s))) continue;
-      logItems.push([kind, path, count]);
-      logDirty = true;
-      const n = resolve(path);
-      if (n) pulse(n, kind, count, t);
-    }
-    if (logItems.length > 200) logItems.splice(0, logItems.length - 200);
+  if (!ANDROID) {
+    new EventSource('/api/events').onmessage = ev => onBatch(JSON.parse(ev.data));
+    return;
+  }
+  const poll = async () => {
+    try { onBatch(await (await fetch('/api/poll')).json()); } catch {}
+    setTimeout(poll, POLL_MS);
   };
+  poll();
 }
 
 setInterval(() => {
@@ -985,24 +1027,36 @@ function pick(mx, my) {
 }
 
 let downAt = null;
-canvas.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; });
+canvas.addEventListener('pointerdown', e => {
+  downAt = [e.clientX, e.clientY];
+  if (e.pointerType === 'touch') showTip(null);
+});
 canvas.addEventListener('pointermove', e => {
+  if (e.pointerType === 'touch') return;      // a finger has no hover; a tap shows the tip instead
   const n = e.buttons ? null : pick(e.clientX, e.clientY);
   if (n !== hover) { hover = n; dirty = true; }
+  showTip(n, e);
+});
+canvas.addEventListener('pointerleave', e => {
+  if (e.pointerType === 'touch') return;
+  hover = null; showTip(null); dirty = true;
+});
+
+function showTip(n, e) {
   const tip = $('#tip');
   if (!n) { tip.style.display = 'none'; return; }
   tip.innerHTML = describe(n, true);
   tip.style.display = 'block';
   const tw = tip.offsetWidth, th = tip.offsetHeight;
-  tip.style.left = Math.min(e.clientX + 14, W - tw - 8) + 'px';
-  tip.style.top = Math.min(e.clientY + 14, H - th - 8) + 'px';
-});
-canvas.addEventListener('pointerleave', () => { hover = null; $('#tip').style.display = 'none'; dirty = true; });
+  tip.style.left = Math.max(8, Math.min(e.clientX + 14, W - tw - 8)) + 'px';
+  tip.style.top = Math.max(8, Math.min(e.clientY + 14, H - th - 8)) + 'px';
+}
 canvas.addEventListener('click', e => {
   if (downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return;
   const n = pick(e.clientX, e.clientY);
   if (!n) { if (root) zoomTo(root); return; }
   select(n);
+  if (e.pointerType === 'touch' || ANDROID) showTip(n, e);
   if (n.kind === 'd' || n.kind === 'c') zoomTo(n === focusNode && n.parent ? n.parent : n);
 });
 
@@ -1062,6 +1116,17 @@ $('#ignore').oninput = e => { ignore = e.target.value.split(',').map(s => s.trim
 $('#hide').onclick = () => { $('#panel').classList.add('hidden'); $('#toggle').hidden = false; dirty = true; };
 $('#toggle').onclick = () => { $('#panel').classList.remove('hidden'); $('#toggle').hidden = true; dirty = true; };
 $('#optMotion').checked = opts.motion;
+$('#grant').onclick = () => fetch('/api/permission', { method: 'POST' });
+if (ANDROID) {
+  $('#budget input[value="8000"]').checked = true; // gentler on a phone
+  if (innerWidth <= 720) $('#hide').click();      // the map first, the panel on demand
+  // the app's Back button: close the panel, then rise a folder, then leave
+  window.aristarkusBack = () => {
+    if (innerWidth <= 720 && !$('#panel').classList.contains('hidden')) { $('#hide').click(); return true; }
+    if (focusNode && focusNode.parent) { zoomTo(focusNode.parent); return true; }
+    return false;
+  };
+}
 addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   if (e.key === 'Escape' && focusNode && focusNode.parent) zoomTo(focusNode.parent);

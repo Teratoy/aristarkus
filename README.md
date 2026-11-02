@@ -1,6 +1,6 @@
 # Aristarkus
 
-A living map of the files on your computer. Every file is a circle sized by how big it is, sitting inside the circle of its folder, folders inside folders all the way down. The circles drift gently, and when a program reads or writes a file, that file lights up and a thread connects it to whatever was touched just before.
+A living map of the files on your computer. Every file is a circle sized by how big it is, sitting inside the circle of its folder, folders inside folders all the way down. When a program reads or writes a file, that file lights up and a thread connects it to whatever was touched just before.
 
 Everything runs on your own machine: a small local server scans the folder you pick and serves the map at `http://localhost:8787`. Nothing is uploaded anywhere.
 
@@ -31,6 +31,7 @@ Your browser opens on the map. The first scan of a big home folder takes a few s
 - **Scroll / drag** to zoom and pan freely. Dashed circles are folders whose contents load when you zoom into them.
 - **Start folder** (panel): type any path and press Scan, or select a folder and click *Start from here*.
 - **Live activity**: rings show reads (cyan), writes (orange), creates (green) and deletes (red). The log lists them; click one to jump to it. Type into *hide paths with...* to mute noisy folders.
+- **Organic motion** (Display panel, off by default): circles drift gently inside their folders without ever overlapping.
 - **Light or dark**: follows your system setting; the switch in the top-right corner flips it.
 
 | System | Live activity |
@@ -73,3 +74,7 @@ The GitHub workflow builds and tests Linux and Windows on every push, and publis
 - Look and feel: the house style of [Daemon Domain](https://daemondomain.net) (monochrome glass, `web/theme.js`).
 - Drawing and layout: [d3](https://d3js.org) (ISC license, see `web/d3-LICENSE.txt`).
 - Font: [Tomorrow](https://github.com/MonicaRizzolli/Tomorrow) by Tony de Marco and Monica Rizzolli (SIL Open Font License, see `web/fonts/OFL.txt`).
+
+## License
+
+[MIT](LICENSE). The bundled d3 (ISC) and Tomorrow font (SIL OFL 1.1) keep their own licenses, listed above.

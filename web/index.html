@@ -399,7 +399,7 @@
   <div class="sec">
     <div class="sec-head"><h2>Display</h2></div>
     <div class="toggles">
-      <label><input type="checkbox" id="optMotion" checked> organic motion</label>
+      <label><input type="checkbox" id="optMotion"> organic motion</label>
       <label><input type="checkbox" id="optThreads" checked> activity threads</label>
       <label><input type="checkbox" id="optReads" checked> show reads</label>
       <label><input type="checkbox" id="optWrites" checked> show writes</label>
@@ -469,7 +469,7 @@ let W = 0, H = 0, DPR = 1;
 let T = d3.zoomIdentity;
 let root = null, rootPath = '', rootPrefix = '/', gen = -1;
 let frame = 0, dirty = true, hover = null, selected = null, focusNode = null;
-const opts = { motion: !matchMedia('(prefers-reduced-motion: reduce)').matches, threads: true, reads: true, writes: true, labels: true };
+const opts = { motion: false, threads: true, reads: true, writes: true, labels: true };
 let ignore = [];
 
 // ------------------------------------------------------------ tree model

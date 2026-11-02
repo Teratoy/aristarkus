@@ -37,7 +37,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-__version__ = '0.1.1'
+__version__ = '0.1.2'
 
 FROZEN = getattr(sys, 'frozen', False)
 WEB = os.path.join(getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__))), 'web')

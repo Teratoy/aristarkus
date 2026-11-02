@@ -35,6 +35,21 @@ def listen(url, out):
         out.put(['error', str(e), 0])
 
 
+def stop(proc):
+    """Stop the program and everything it started: a onefile .exe is a launcher that runs
+    the app as a child, which a plain terminate() on Windows leaves running."""
+    if proc.poll() is not None:
+        return
+    if sys.platform == 'win32':
+        subprocess.run(['taskkill', '/T', '/F', '/PID', str(proc.pid)], capture_output=True)
+    else:
+        proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+
 def check(program, port):
     tmp = tempfile.mkdtemp(prefix='aristarkus-smoke-')
     for rel, size in FILES.items():
@@ -99,16 +114,11 @@ def check(program, port):
             assert 'scanned' in open(logfile, encoding='utf-8').read()
         print(f'ok   {program}  ({st["platform"]}, live activity: {st["watchMode"]}, reads: {st["reads"]})')
     except Exception:
-        proc.terminate()
+        stop(proc)
         print(f'FAIL {program}\n--- program output ---\n{proc.communicate(timeout=10)[0]}', file=sys.stderr)
         raise
     finally:
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+        stop(proc)
         shutil.rmtree(tmp, ignore_errors=True)
 
 

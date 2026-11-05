@@ -218,23 +218,69 @@
   #crumbs a:hover { color: var(--fg); text-shadow: 0 0 5px var(--accent); }
   #crumbs span { margin: 0 5px; opacity: 0.5; }
 
-  /* Below the theme switch, which owns the top-right corner. */
-  #panel {
+  /* Stacks of parts. Each stack is a window: docked on the right (below the theme switch, which
+     owns the top-right corner) or floating where it was dropped. */
+  #dock:not(.ready) { visibility: hidden; }
+  .stack {
     position: fixed;
-    top: calc(max(0.5rem, env(safe-area-inset-top)) + 48px);
-    right: max(12px, env(safe-area-inset-right));
-    bottom: max(12px, env(safe-area-inset-bottom));
     width: 372px;
+    max-height: calc(100vh - 24px);
     display: flex;
     flex-direction: column;
     overflow-y: auto;
     transition: opacity var(--transition), transform var(--transition);
   }
-  #panel.hidden { opacity: 0; transform: translateX(24px); pointer-events: none; }
-  .sec { padding: 14px 18px; border-bottom: 1px solid rgba(var(--fg-rgb), 0.15); }
-  .sec-head { display: flex; align-items: center; justify-content: space-between; margin: 0 0 10px; }
-  .sec h2 { margin: 0; font-size: 14px; font-weight: 700; color: rgba(var(--fg-rgb), 0.62); }
-  .sec-head .icon-btn { width: 32px; height: 32px; margin: -6px -8px -6px 0; }
+  .stack.docked {
+    top: calc(max(0.5rem, env(safe-area-inset-top)) + 48px);
+    right: max(12px, env(safe-area-inset-right));
+    bottom: max(12px, env(safe-area-inset-bottom));
+    max-height: none;
+  }
+  .stack:not(:has(.part:not([hidden]))) { display: none; }
+  #dock.hidden .stack { opacity: 0; transform: translateX(24px); pointer-events: none; }
+  .stack.moving { transition: none; opacity: 0.92; }
+  .stack.drop-target { outline: 2px solid rgba(var(--fg-rgb), 0.45); outline-offset: 3px; }
+  .stack-grip { position: relative; flex: none; height: 22px; display: flex; align-items: center; justify-content: center; cursor: grab; touch-action: none; }
+  .stack-grip::before { content: ''; width: 36px; height: 4px; border-radius: 2px; background: rgba(var(--fg-rgb), 0.25); transition: background var(--transition); }
+  .stack-grip:hover::before { background: rgba(var(--fg-rgb), 0.55); }
+  .stack-hide { position: absolute; right: 4px; top: -1px; width: 24px; height: 24px; }
+  .stack-hide svg { width: 14px; height: 14px; }
+  .part { flex: none; border-top: 1px solid rgba(var(--fg-rgb), 0.15); }
+  .part-head { margin: 0; }
+  .part-toggle {
+    all: unset;
+    box-sizing: border-box;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 18px;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    color: rgba(var(--fg-rgb), 0.62);
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    transition: color var(--transition);
+  }
+  .part-toggle:hover { color: var(--fg); }
+  .part-toggle:focus-visible { outline: 2px solid rgba(var(--fg-rgb), 0.5); outline-offset: -2px; border-radius: 6px; }
+  .part-toggle::after {
+    content: '';
+    width: 7px;
+    height: 7px;
+    margin-top: -4px;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(45deg);
+    transition: transform var(--transition), margin var(--transition);
+  }
+  .part.closed .part-toggle::after { transform: rotate(-45deg); margin-top: 0; }
+  .part-body { padding: 0 18px 14px; }
+  .part.closed .part-body { display: none; }
+  .part.dragging { opacity: 0.5; }
+  #dropLine { position: fixed; display: none; height: 3px; border-radius: 2px; background: var(--fg); box-shadow: 0 0 8px var(--accent); pointer-events: none; z-index: 990; }
   .row { display: flex; gap: 8px; align-items: center; }
   .row + .row { margin-top: 8px; }
   .row:has(.seg) { flex-wrap: wrap; }
@@ -249,7 +295,10 @@
   #sel .name { font-weight: 700; color: var(--fg); word-break: break-all; }
   #sel .path { font-size: 12px; color: rgba(var(--fg-rgb), 0.55); word-break: break-all; margin: 2px 0 6px; }
   #sel .btns { display: flex; gap: 4px; flex-wrap: wrap; margin: 8px -8px 0; }
-  #logsec { flex: 1 0 220px; display: flex; flex-direction: column; border-bottom: 0; }
+  /* docked, the activity log takes whatever height is left; floating, it gets its own */
+  .stack.docked #logsec:not(.closed) { flex: 1 0 220px; display: flex; flex-direction: column; }
+  .stack.docked #logsec:not(.closed) .part-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .stack:not(.docked) #log { flex: none; height: 220px; }
   #rates { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-bottom: 8px; font-size: 13px; }
   #rates span { white-space: nowrap; }
   #rates b { font-weight: 700; color: var(--fg); }
@@ -284,14 +333,27 @@
   #log .k { width: 10px; flex: none; font-weight: 700; }
   #log .p { overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; flex: 1; color: rgba(var(--fg-rgb), 0.8); }
   #log .n { flex: none; color: rgba(var(--fg-rgb), 0.55); }
+  #log .who { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; color: rgba(var(--fg-rgb), 0.55); }
+  #searchResults { margin-top: 8px; max-height: 320px; overflow-y: auto; font-size: 13px; }
+  #searchResults button { all: unset; box-sizing: border-box; display: block; width: 100%; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+  #searchResults button:hover, #searchResults button:focus-visible { background: rgba(var(--fg-rgb), 0.08); }
+  #searchResults b { color: var(--fg); word-break: break-all; }
+  #searchResults .where { display: block; font-size: 11px; color: rgba(var(--fg-rgb), 0.55); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+  #sel .who { margin-top: 8px; font-size: 12px; }
+  #shareTrash { margin-top: 10px; }
+  #shareTrash summary { cursor: pointer; font-size: 14px; color: rgba(var(--fg-rgb), 0.7); }
+  #shareTrashList { margin-top: 6px; max-height: 240px; overflow-y: auto; font-size: 12px; }
+  #shareTrashList div { display: flex; align-items: center; gap: 6px; }
+  #shareTrashList span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #shareTrashList .btn { padding: 2px 10px; font-size: 12px; }
   .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; }
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
   .dot.ring { background: none; border: 2px solid; width: 10px; height: 10px; }
   .dot.folder { background: rgba(var(--fg-rgb), 0.12); border: 1px dashed rgba(var(--fg-rgb), 0.6); }
 
   #tip {
+    z-index: 1000;
     position: fixed;
-    z-index: 5;
     display: none;
     max-width: 360px;
     padding: 8px 12px;
@@ -383,12 +445,16 @@
 
   @media (max-width: 720px) {
     #top { right: 140px; }
-    #panel { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; height: 55vh; }
-    .sec { padding: 12px 14px; }
+    .stack.docked { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; height: 55vh; }
+    .stack-grip { cursor: default; }
+    .part-toggle { padding: 10px 14px; cursor: pointer; touch-action: auto; }
+    .part-body { padding: 0 14px 12px; }
   }
   @media (hover: none) and (pointer: coarse) {
     .btn { min-height: 44px; }
-    .icon-btn, .sec-head .icon-btn { width: 44px; height: 44px; }
+    .icon-btn { width: 44px; height: 44px; }
+    .stack-grip { height: 44px; }
+    .stack-hide { top: 0; width: 44px; height: 44px; }
     .theme-switch { height: 44px; }
   }
   @media (prefers-reduced-motion: reduce) {
@@ -413,117 +479,142 @@
   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
 </button>
 
-<aside id="panel" class="glass scroll" aria-label="Controls">
-  <div class="sec">
-    <div class="sec-head">
-      <h2>Start folder</h2>
-      <button class="btn icon-btn" id="hide" aria-label="Hide panel" title="Hide panel">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg>
-      </button>
-    </div>
-    <div class="row">
-      <input type="text" id="rootIn" class="grow" spellcheck="false" placeholder="/some/folder" aria-label="Start folder">
-      <button class="btn" id="scan">Scan</button>
-    </div>
-    <div class="row">
-      <button class="btn" id="home">Home</button>
-      <span class="grow"></span>
+<aside id="dock" aria-label="Controls">
+  <section class="part" data-part="start">
+    <h2 class="part-head"><button class="part-toggle" type="button" aria-expanded="true">Start folder</button></h2>
+    <div class="part-body">
       <div class="row">
-        <span class="muted" id="budgetLabel">detail</span>
-        <div class="seg" id="budget" role="radiogroup" aria-labelledby="budgetLabel">
-          <label><input type="radio" name="budget" value="8000">light</label>
-          <label><input type="radio" name="budget" value="25000" checked>normal</label>
-          <label><input type="radio" name="budget" value="70000">dense</label>
+        <input type="text" id="rootIn" class="grow" spellcheck="false" placeholder="/some/folder" aria-label="Start folder">
+        <button class="btn" id="scan">Scan</button>
+      </div>
+      <div class="row">
+        <button class="btn" id="home">Home</button>
+        <span class="grow"></span>
+        <div class="row">
+          <span class="muted" id="budgetLabel">detail</span>
+          <div class="seg" id="budget" role="radiogroup" aria-labelledby="budgetLabel">
+            <label><input type="radio" name="budget" value="8000">light</label>
+            <label><input type="radio" name="budget" value="25000" checked>normal</label>
+            <label><input type="radio" name="budget" value="70000">dense</label>
+          </div>
         </div>
       </div>
+      <div class="meta stat" id="status" role="status" aria-live="polite">—</div>
+      <div class="row" id="stopRow">
+        <button class="btn" id="quit">Stop Aristarkus</button>
+      </div>
     </div>
-    <div class="meta stat" id="status" role="status" aria-live="polite">—</div>
-    <div class="row" id="stopRow">
-      <button class="btn" id="quit">Stop Aristarkus</button>
-    </div>
-  </div>
+  </section>
 
-  <div class="sec" id="sharesec" hidden>
-    <div class="sec-head"><h2>Shared folder</h2></div>
-    <div id="shareOff">
-      <div class="meta">Mirror one folder with another computer on this network: what either of you adds, changes or deletes reaches the other.</div>
+  <section class="part" data-part="search" id="searchsec">
+    <h2 class="part-head"><button class="part-toggle" type="button" aria-expanded="true">Search</button></h2>
+    <div class="part-body">
       <div class="row">
-        <input type="text" id="shareFolder" class="grow" spellcheck="false" placeholder="~/Aristarkus Shared" aria-label="Folder to share">
+        <input type="text" id="searchIn" class="grow" spellcheck="false" placeholder="part of a name" aria-label="Search for a name">
+        <button class="btn" id="searchGo">Find</button>
       </div>
-      <div class="row">
-        <button class="btn" id="shareHost">Start sharing</button>
-      </div>
-      <div class="row">
-        <input type="text" id="shareInvite" class="grow" spellcheck="false" placeholder="or paste a code" aria-label="Share code from the other computer">
-        <button class="btn" id="shareJoin">Join</button>
-      </div>
+      <div class="meta" id="searchInfo" role="status" aria-live="polite"></div>
+      <div id="searchResults"></div>
     </div>
-    <div id="shareOn" hidden>
-      <div class="name" id="shareName"></div>
-      <div class="meta" id="shareState" role="status" aria-live="polite"></div>
-      <div id="shareInviteBox" hidden>
-        <div class="meta">Send this code to the other computer, and only to them: it gives access to this folder.</div>
-        <div id="shareCode"></div>
-        <button class="btn" id="shareCopy">Copy code</button>
-      </div>
-      <div id="shareBar" hidden><i></i></div>
-      <div id="shareProblems" hidden></div>
-      <div id="shareRecent" class="muted"></div>
-      <div class="row">
-        <button class="btn" id="shareMap">Show on map</button>
-        <span class="grow"></span>
-        <button class="btn" id="shareStop">Stop sharing</button>
-      </div>
-      <details id="shareNet">
-        <summary>Network settings</summary>
-        <div class="meta" id="shareNetHint"></div>
-        <label for="shareAddr" id="shareAddrLabel"></label>
-        <input type="text" id="shareAddr" spellcheck="false" autocomplete="off">
-        <div id="shareAddrs"></div>
-        <div id="sharePortBox">
-          <label for="sharePort">Port</label>
-          <input type="text" id="sharePort" inputmode="numeric" spellcheck="false" autocomplete="off">
+  </section>
+
+  <section class="part" data-part="share" id="sharesec" hidden>
+    <h2 class="part-head"><button class="part-toggle" type="button" aria-expanded="true">Shared folder</button></h2>
+    <div class="part-body">
+      <div id="shareOff">
+        <div class="meta">Mirror one folder with another computer on this network: what either of you adds, changes or deletes reaches the other.</div>
+        <div class="row">
+          <input type="text" id="shareFolder" class="grow" spellcheck="false" placeholder="~/Aristarkus Shared" aria-label="Folder to share">
         </div>
         <div class="row">
-          <button class="btn" id="shareApply">Apply</button>
-          <span class="grow"></span>
-          <button class="btn" id="sharePause">Pause sharing</button>
+          <button class="btn" id="shareHost">Start sharing</button>
         </div>
-      </details>
+        <div class="row">
+          <input type="text" id="shareInvite" class="grow" spellcheck="false" placeholder="or paste a code" aria-label="Share code from the other computer">
+          <button class="btn" id="shareJoin">Join</button>
+        </div>
+      </div>
+      <div id="shareOn" hidden>
+        <div class="name" id="shareName"></div>
+        <div class="meta" id="shareState" role="status" aria-live="polite"></div>
+        <div id="shareInviteBox" hidden>
+          <div class="meta">Send this code to the other computer, and only to them: it gives access to this folder.</div>
+          <div id="shareCode"></div>
+          <button class="btn" id="shareCopy">Copy code</button>
+        </div>
+        <div id="shareBar" hidden><i></i></div>
+        <div id="shareProblems" hidden></div>
+        <div id="shareRecent" class="muted"></div>
+        <div class="row">
+          <button class="btn" id="shareMap">Show on map</button>
+          <span class="grow"></span>
+          <button class="btn" id="shareStop">Stop sharing</button>
+        </div>
+        <details id="shareTrash">
+          <summary>Deleted files</summary>
+          <div class="meta">Files the sync removed here in the last 30 days. A restored file comes back on both computers.</div>
+          <div id="shareTrashList"></div>
+        </details>
+        <details id="shareNet">
+          <summary>Network settings</summary>
+          <div class="meta" id="shareNetHint"></div>
+          <label for="shareAddr" id="shareAddrLabel"></label>
+          <input type="text" id="shareAddr" spellcheck="false" autocomplete="off">
+          <div id="shareAddrs"></div>
+          <div id="sharePortBox">
+            <label for="sharePort">Port</label>
+            <input type="text" id="sharePort" inputmode="numeric" spellcheck="false" autocomplete="off">
+          </div>
+          <div class="row">
+            <button class="btn" id="shareApply">Apply</button>
+            <span class="grow"></span>
+            <button class="btn" id="sharePause">Pause sharing</button>
+          </div>
+        </details>
+      </div>
+      <div class="meta err" id="shareErr" role="alert"></div>
     </div>
-    <div class="meta err" id="shareErr" role="alert"></div>
-  </div>
+  </section>
 
-  <div class="sec" id="sel">
-    <div class="sec-head"><h2>Selection</h2></div>
-    <div class="muted">Hover or poke a sphere. Click a folder to dive in, click its empty bit to come back up.</div>
-  </div>
-
-  <div class="sec">
-    <div class="sec-head"><h2>Display</h2></div>
-    <div class="toggles">
-      <label><input type="checkbox" id="optMotion"> organic motion</label>
-      <label><input type="checkbox" id="optThreads" checked> activity threads</label>
-      <label><input type="checkbox" id="optReads" checked> show reads</label>
-      <label><input type="checkbox" id="optWrites" checked> show writes</label>
-      <label><input type="checkbox" id="optLabels" checked> labels</label>
+  <section class="part" data-part="sel">
+    <h2 class="part-head"><button class="part-toggle" type="button" aria-expanded="true">Selection</button></h2>
+    <div class="part-body" id="sel">
+      <div class="muted">Hover or poke a sphere. Click a folder to dive in, click its empty bit to come back up.</div>
     </div>
-    <div class="row" style="margin-top:10px">
-      <input type="text" id="ignore" class="grow" spellcheck="false" placeholder="hide paths with... (comma separated)" aria-label="Hide activity on paths containing">
+  </section>
+
+  <section class="part" data-part="display">
+    <h2 class="part-head"><button class="part-toggle" type="button" aria-expanded="true">Display</button></h2>
+    <div class="part-body">
+      <div class="toggles">
+        <label><input type="checkbox" id="optMotion"> organic motion</label>
+        <label><input type="checkbox" id="optThreads" checked> activity threads</label>
+        <label><input type="checkbox" id="optReads" checked> show reads</label>
+        <label><input type="checkbox" id="optWrites" checked> show writes</label>
+        <label><input type="checkbox" id="optLabels" checked> labels</label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <input type="text" id="ignore" class="grow" spellcheck="false" placeholder="hide paths with... (comma separated)" aria-label="Hide activity on paths containing">
+      </div>
     </div>
-  </div>
+  </section>
 
-  <div class="sec">
-    <div class="sec-head"><h2>Legend</h2></div>
-    <div class="legend" id="legend"></div>
-  </div>
+  <section class="part" data-part="legend">
+    <h2 class="part-head"><button class="part-toggle" type="button" aria-expanded="true">Legend</button></h2>
+    <div class="part-body">
+      <div class="legend" id="legend"></div>
+    </div>
+  </section>
 
-  <div class="sec" id="logsec">
-    <div class="sec-head"><h2>Live activity</h2></div>
-    <div id="rates" class="stat" role="status" aria-live="off"></div>
-    <div id="log" class="scroll"></div>
-  </div>
+  <section class="part" data-part="log" id="logsec">
+    <h2 class="part-head"><button class="part-toggle" type="button" aria-expanded="true">Live activity</button></h2>
+    <div class="part-body">
+      <div id="rates" class="stat" role="status" aria-live="off"></div>
+      <div id="log" class="scroll"></div>
+    </div>
+  </section>
 </aside>
+<div id="dropLine" aria-hidden="true"></div>
 </main>
 
 <script>
@@ -676,12 +767,26 @@ function resolve(path) {
 
 // ------------------------------------------------------------ loading
 
+// zoom to any path below the start folder, loading folders on the way down
+async function reveal(path) {
+  for (let i = 0; i < 64; i++) {
+    const n = resolve(path);
+    if (!n) return;
+    if (n.kind === 'c' && pathOf(n) !== path && await expand(n, true) !== null && !n.failed) continue;
+    select(n);
+    zoomTo(n.kind === 'f' || n.kind === 'o' ? n.parent || n : n);
+    return;
+  }
+}
+
 let inflight = 0;
-function expand(n) {
-  if (n.loading || n.failed || inflight >= 3) return;
-  n.loading = true; inflight++;
+// load a collapsed folder's contents; `now` skips the limit on parallel loads (for search results)
+function expand(n, now) {
+  if (n.loading) return n.loading;
+  if (n.failed || (!now && inflight >= 3)) return null;
+  inflight++;
   const myGen = gen;
-  fetch(`/api/tree?budget=${LAZY_BUDGET}&path=${encodeURIComponent(pathOf(n))}`)
+  n.loading = fetch(`/api/tree?budget=${LAZY_BUDGET}&path=${encodeURIComponent(pathOf(n))}`)
     .then(r => r.ok ? r.json() : Promise.reject(r.status))
     .then(j => {
       if (myGen !== gen || n.kind !== 'c') return;
@@ -692,7 +797,8 @@ function expand(n) {
       dirty = true;
     })
     .catch(() => { n.failed = true; })
-    .finally(() => { n.loading = false; inflight--; });
+    .finally(() => { n.loading = null; inflight--; });
+  return n.loading;
 }
 
 async function status() { return (await fetch('/api/status')).json(); }
@@ -976,11 +1082,11 @@ function onBatch(m) {
   const t = performance.now() / 1000;
   dropped += m.drop || 0;
   if (m.overflow) overflowed = true;
-  for (const [kind, path, count] of m.e) {
+  for (const [kind, path, count, who] of m.e) {
     rate[kind] += count;
     if (kind === 'r' ? !opts.reads : !opts.writes) continue;
     if (ignore.length && ignore.some(s => path.includes(s))) continue;
-    logItems.push([kind, path, count]);
+    logItems.push([kind, path, count, who]);
     logDirty = true;
     const n = resolve(path);
     if (n) pulse(n, kind, count, t);
@@ -1014,9 +1120,10 @@ setInterval(() => {
   if (!logDirty) return;
   logDirty = false;
   const rows = logItems.slice(-60).reverse();
-  $('#log').innerHTML = rows.map(([k, p, c]) => {
+  $('#log').innerHTML = rows.map(([k, p, c, who]) => {
     const rel = p.startsWith(rootPrefix) ? p.slice(rootPrefix.length) : p;
-    return `<div data-p="${esc(p)}" title="${esc(p)}"><span class="k" style="color:${KIND[k].color}">${KIND[k].mark}</span><span class="p">&lrm;${esc(rel)}&lrm;</span>${c > 1 ? `<span class="n">×${c}</span>` : ''}</div>`;
+    const tip = who ? `${p}\nopen in: ${who}` : p;
+    return `<div data-p="${esc(p)}" title="${esc(tip)}"><span class="k" style="color:${KIND[k].color}">${KIND[k].mark}</span><span class="p">&lrm;${esc(rel)}&lrm;</span>${c > 1 ? `<span class="n">×${c}</span>` : ''}${who ? `<span class="who">${esc(who)}</span>` : ''}</div>`;
   }).join('');
 }, 250);
 
@@ -1065,10 +1172,11 @@ const zoom = d3.zoom()
   .on('zoom', e => { T = e.transform; dirty = true; });
 d3.select(canvas).call(zoom).on('dblclick.zoom', null);
 
-// the part of the window the panel doesn't cover: beside it on wide screens, above it on narrow ones
+// the part of the window the docked panels don't cover: beside them on wide screens, above on narrow
+// ones. Floating windows are wherever someone put them, so they don't count.
 function viewBox() {
-  const panel = $('#panel');
-  if (panel.classList.contains('hidden')) return { cx: W / 2, cy: H / 2 + 14, size: Math.min(W, H - 40) };
+  const panel = $('#dock .stack.docked');
+  if (!panel || $('#dock').classList.contains('hidden')) return { cx: W / 2, cy: H / 2 + 14, size: Math.min(W, H - 40) };
   if (W > 720) {
     const w = W - panel.offsetWidth - 24;
     return { cx: w / 2, cy: H / 2 + 14, size: Math.min(w, H - 40) };
@@ -1154,18 +1262,36 @@ function describe(n, short) {
 
 function showSel(n) {
   const box = $('#sel');
-  const head = '<div class="sec-head"><h2>Selection</h2></div>';
-  if (!n) { box.innerHTML = head + '<div class="muted">Hover or poke a sphere. Click a folder to dive in, click its empty bit to come back up.</div>'; return; }
-  const isDir = n.kind === 'd' || n.kind === 'c';
-  box.innerHTML = `${head}${describe(n, false)}<div class="btns">
+  if (!n) { box.innerHTML = '<div class="muted">Hover or poke a sphere. Click a folder to dive in, click its empty bit to come back up.</div>'; return; }
+  const isDir = n.kind === 'd' || n.kind === 'c', isFile = n.kind === 'f';
+  const desk = !ANDROID;    // the app has no file manager to hand files to
+  box.innerHTML = `${describe(n, false)}<div class="btns">
     ${isDir ? '<button class="btn" data-a="zoom">Zoom here</button><button class="btn" data-a="root">Start from here</button>' : '<button class="btn" data-a="up">Show folder</button>'}
-    <button class="btn" data-a="copy">Copy path</button></div>`;
-  box.querySelector('.btns').onclick = e => {
+    ${desk && isFile ? '<button class="btn" data-a="open">Open</button>' : ''}
+    ${desk && n.kind !== 'o' ? '<button class="btn" data-a="reveal">Show in file manager</button>' : ''}
+    ${desk && isFile ? '<button class="btn" data-a="who">Which programs have it open?</button>' : ''}
+    <button class="btn" data-a="copy">Copy path</button></div><div class="who meta" role="status" aria-live="polite"></div>`;
+  const say = (text, bad) => { const w = box.querySelector('.who'); w.textContent = text; w.classList.toggle('err', !!bad); };
+  box.querySelector('.btns').onclick = async e => {
     const a = e.target.dataset.a;
     if (a === 'zoom') zoomTo(n);
     if (a === 'up') zoomTo(n.parent || root);
     if (a === 'root') setRoot(pathOf(n));
     if (a === 'copy') navigator.clipboard?.writeText(pathOf(n));
+    if (a === 'open' || a === 'reveal') {
+      const r = await fetch(`/api/open?path=${encodeURIComponent(pathOf(n))}&reveal=${a === 'reveal' ? 1 : 0}`,
+                            { method: 'POST', headers: SHARE_HEADERS }).catch(() => null);
+      if (!r || !r.ok) say(r ? (await r.json()).error : "Aristarkus isn't running", true);
+    }
+    if (a === 'who') {
+      say('Looking…');
+      const r = await fetch(`/api/who?path=${encodeURIComponent(pathOf(n))}`, { headers: SHARE_HEADERS }).catch(() => null);
+      const j = r && r.ok ? await r.json() : null;
+      if (!j) say(r ? (await r.json()).error : "Aristarkus isn't running", true);
+      else if (!j.supported) say("This system can't tell which programs have a file open.");
+      else if (!j.programs.length) say('No program has it open right now.');
+      else say('Open in: ' + j.programs.map(p => `${p.name} (${p.pid})`).join(', '));
+    }
   };
 }
 
@@ -1183,6 +1309,275 @@ function crumbs() {
     el.appendChild(a);
   });
 }
+
+// ------------------------------------------------------------ panels
+// Every part has a title bar. Click it to open or close the part; drag it to move the part up or
+// down its stack. Dragged well outside the stack, the part comes loose as a window of its own;
+// dropped on another window, it joins that stack; dropped against the right edge, it docks. The grip
+// on top of a stack moves the whole stack. Phones keep one stack at the bottom and only open/close.
+
+const dock = $('#dock');
+const PARTS = [...dock.querySelectorAll('.part')].map(p => p.dataset.part);
+const partEl = id => dock.querySelector(`.part[data-part="${id}"]`);
+const LAYOUT_KEY = 'aristarkusLayout';
+const DETACH = 48;      // how far outside its stack a part has to go to come loose
+const SNAP = 40;        // how close to the right edge a window docks
+let layout = loadLayout();
+let drag = null, dragEnded = 0;
+
+function loadLayout() {
+  try {
+    const l = JSON.parse(localStorage.getItem(LAYOUT_KEY));
+    const seen = l.stacks.flatMap(st => st.parts);
+    if (seen.every(p => PARTS.includes(p)) && new Set(seen).size === seen.length && l.stacks.length) {
+      l.stacks[0].parts.push(...PARTS.filter(p => !seen.includes(p)));    // parts added in a later version
+      return { stacks: l.stacks.filter(st => st.parts.length), closed: (l.closed || []).filter(p => PARTS.includes(p)) };
+    }
+  } catch {}
+  return { stacks: [{ parts: PARTS.slice(), docked: true }], closed: [] };
+}
+
+function saveLayout() {
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch {}
+}
+
+const narrow = () => innerWidth <= 720;
+
+function makeStack() {
+  const el = document.createElement('div');
+  el.className = 'stack glass scroll';
+  el.innerHTML = `<div class="stack-grip" title="Drag to move these panels">
+    <button class="btn icon-btn stack-hide" type="button" aria-label="Hide panels" title="Hide panels">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg>
+    </button></div>`;
+  el.querySelector('.stack-hide').onclick = () => showPanels(false);
+  return el;
+}
+
+function stackEls() { return [...dock.querySelectorAll('.stack')]; }
+
+function renderPanels() {
+  // a phone gets every part in one stack, in reading order, without touching the saved layout
+  const stacks = narrow() ? [{ parts: layout.stacks.flatMap(st => st.parts), docked: true }] : layout.stacks;
+  const els = stackEls();
+  stacks.forEach((st, i) => {
+    const el = els[i] || dock.appendChild(makeStack());
+    el.stack = st;
+    el.classList.toggle('docked', !!st.docked);
+    el.style.left = st.docked ? '' : `${st.x}px`;
+    el.style.top = st.docked ? '' : `${st.y}px`;
+    el.style.maxHeight = '';
+    st.parts.forEach((p, k) => {    // move only what's out of place: moving a part would blur its inputs
+      const pe = partEl(p);
+      if (el.children[k + 1] !== pe) el.insertBefore(pe, el.children[k + 1] || null);
+    });
+  });
+  els.slice(stacks.length).forEach(el => el.remove());
+  layerStacks();
+  for (const p of PARTS) {
+    const shut = layout.closed.includes(p);
+    partEl(p).classList.toggle('closed', shut);
+    partEl(p).querySelector('.part-toggle').setAttribute('aria-expanded', String(!shut));
+  }
+  keepOnScreen();
+  dirty = true;
+}
+
+function keepOnScreen() {
+  for (const el of stackEls()) {
+    const st = el.stack;
+    if (st.docked || narrow()) continue;
+    st.x = Math.max(0, Math.min(st.x, innerWidth - el.offsetWidth));
+    st.y = Math.max(0, Math.min(st.y, innerHeight - 40));
+    el.style.left = `${st.x}px`;
+    el.style.top = `${st.y}px`;
+    el.style.maxHeight = `${innerHeight - st.y - 12}px`;    // scrolls rather than run off the bottom
+  }
+}
+
+function showPanels(show) {
+  dock.classList.toggle('hidden', !show);
+  $('#toggle').hidden = show;
+  dirty = true;
+}
+
+function layerStacks() {      // the most recently touched window is in front
+  const order = stackEls().sort((a, b) => (a.stack.z || 0) - (b.stack.z || 0));
+  order.forEach((el, i) => { el.style.zIndex = 10 + i; });
+}
+
+function toFront(el) {
+  if (narrow()) return;
+  const top = Math.max(0, ...layout.stacks.map(st => st.z || 0));
+  if ((el.stack.z || 0) === top && top) return;
+  el.stack.z = top + 1;
+  layerStacks();
+  saveLayout();
+}
+
+function syncOrder(el) {     // the DOM is the truth while a part is being dragged within its stack
+  el.stack.parts = [...el.querySelectorAll(':scope > .part')].map(p => p.dataset.part);
+}
+
+// where in a stack a part dropped at height y would go
+function slotAt(el, y, except) {
+  const parts = [...el.querySelectorAll(':scope > .part')].filter(p => p !== except && !p.hidden);
+  const i = parts.findIndex(p => { const r = p.getBoundingClientRect(); return y < r.top + Math.min(r.height, 40) / 2; });
+  return i < 0 ? { before: null, y: el.getBoundingClientRect().bottom - 3 } : { before: parts[i], y: parts[i].getBoundingClientRect().top - 2 };
+}
+
+function dropTarget(x, y, self) {
+  return stackEls().reverse().find(el => {
+    if (el === self || !el.getClientRects().length) return false;    // hidden: nothing to drop on
+    const r = el.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  });
+}
+
+function startMove(e) {
+  const el = drag.stackEl, r = el.getBoundingClientRect();
+  if (el.stack.docked) {
+    el.stack.docked = false;
+    el.stack.x = r.left;
+    el.stack.y = r.top;
+    renderPanels();
+  }
+  drag.mode = 'move';
+  drag.dx = Math.min(drag.x0 - r.left, 200);     // where it was grabbed, not where the pointer is now
+  drag.dy = Math.min(drag.y0 - r.top, 20);
+  el.classList.add('moving');
+}
+
+function detach(e) {
+  const el = drag.stackEl, part = drag.part;
+  syncOrder(el);
+  el.stack.parts = el.stack.parts.filter(p => p !== part.dataset.part);
+  const loose = { parts: [part.dataset.part], docked: false, x: e.clientX - 60, y: e.clientY - 34 };
+  layout.stacks.push(loose);
+  part.classList.remove('dragging');
+  renderPanels();
+  drag.stackEl = stackEls().find(s => s.stack === loose);
+  drag.stackEl.classList.add('moving');
+  drag.mode = 'move';
+  drag.dx = 60;
+  drag.dy = 34;
+}
+
+function showDrop(target, y) {
+  for (const el of stackEls()) el.classList.toggle('drop-target', el === target);
+  const line = $('#dropLine');
+  if (!target) { line.style.display = 'none'; return; }
+  const r = target.getBoundingClientRect(), slot = slotAt(target, y);
+  Object.assign(line.style, { display: 'block', left: `${r.left + 12}px`, width: `${r.width - 24}px`, top: `${slot.y}px` });
+}
+
+dock.addEventListener('pointerdown', e => {
+  const stackEl = e.target.closest('.stack');
+  if (!stackEl || e.button !== 0) return;
+  const head = e.target.closest('.part-toggle'), grip = e.target.closest('.stack-grip');
+  if (e.target.closest('.stack-hide') || (!head && !grip)) { toFront(stackEl); return; }
+  if (narrow()) return;
+  e.preventDefault();       // no text selection while dragging
+  drag = { mode: 'pending', id: e.pointerId, x0: e.clientX, y0: e.clientY, stackEl, part: head && head.closest('.part') };
+});
+
+addEventListener('pointermove', e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  if (drag.mode === 'pending') {
+    if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 5) return;
+    toFront(drag.stackEl);
+    // a part alone in its window drags the window; one among others first moves within its stack
+    if (!drag.part || drag.stackEl.stack.parts.length === 1) startMove(e);
+    else { drag.mode = 'reorder'; drag.part.classList.add('dragging'); }
+  }
+  e.preventDefault();
+  if (drag.mode === 'reorder') {
+    const r = drag.stackEl.getBoundingClientRect();
+    if (e.clientX < r.left - DETACH || e.clientX > r.right + DETACH || e.clientY < r.top - DETACH || e.clientY > r.bottom + DETACH) {
+      detach(e);
+    } else {
+      const slot = slotAt(drag.stackEl, e.clientY, drag.part);
+      if (slot.before !== drag.part.nextElementSibling) drag.stackEl.insertBefore(drag.part, slot.before);
+    }
+  }
+  if (drag.mode === 'move') {
+    const st = drag.stackEl.stack;
+    st.x = e.clientX - drag.dx;
+    st.y = e.clientY - drag.dy;
+    drag.stackEl.style.left = `${st.x}px`;
+    drag.stackEl.style.top = `${st.y}px`;
+    drag.stackEl.style.maxHeight = `${Math.max(120, innerHeight - st.y - 12)}px`;
+    drag.target = dropTarget(e.clientX, e.clientY, drag.stackEl);
+    showDrop(drag.target, e.clientY);
+  }
+});
+
+function endDrag(e) {
+  if (!drag || e.pointerId !== drag.id) return;
+  const { mode, stackEl, target } = drag;
+  drag = null;
+  if (mode !== 'pending') dragEnded = performance.now();
+  if (mode === 'reorder') {
+    dock.querySelectorAll('.part.dragging').forEach(p => p.classList.remove('dragging'));
+    syncOrder(stackEl);
+  }
+  if (mode === 'move') {
+    stackEl.classList.remove('moving');
+    showDrop(null);
+    const st = stackEl.stack;
+    const docked = layout.stacks.find(s => s.docked && s !== st);
+    if (target && e.type === 'pointerup') {           // stack it into the window it was dropped on
+      syncOrder(target);
+      const slot = slotAt(target, e.clientY);
+      const at = slot.before ? target.stack.parts.indexOf(slot.before.dataset.part) : target.stack.parts.length;
+      target.stack.parts.splice(at, 0, ...st.parts);
+      layout.stacks = layout.stacks.filter(s => s !== st);
+    } else if (st.x + stackEl.offsetWidth >= innerWidth - SNAP) {     // against the right edge: dock
+      if (docked) {
+        docked.parts.push(...st.parts);
+        layout.stacks = layout.stacks.filter(s => s !== st);
+      } else {
+        st.docked = true;
+      }
+    }
+  }
+  if (mode !== 'pending') {
+    layout.stacks = layout.stacks.filter(s => s.parts.length);
+    renderPanels();
+    saveLayout();
+  }
+}
+addEventListener('pointerup', endDrag);
+addEventListener('pointercancel', endDrag);
+
+dock.addEventListener('click', e => {
+  const t = e.target.closest('.part-toggle');
+  if (!t) return;
+  if (performance.now() - dragEnded < 300) return;     // the click that ends a drag isn't a toggle
+  const p = t.closest('.part').dataset.part;
+  layout.closed = layout.closed.includes(p) ? layout.closed.filter(x => x !== p) : layout.closed.concat([p]);
+  renderPanels();
+  saveLayout();
+});
+
+// keyboard: Alt+Up/Down moves a part within its stack
+dock.addEventListener('keydown', e => {
+  const t = e.target.closest('.part-toggle');
+  if (!t || !e.altKey || !['ArrowUp', 'ArrowDown'].includes(e.key) || narrow()) return;
+  e.preventDefault();
+  const id = t.closest('.part').dataset.part;
+  const st = layout.stacks.find(s => s.parts.includes(id)), i = st.parts.indexOf(id);
+  const j = i + (e.key === 'ArrowUp' ? -1 : 1);
+  if (j < 0 || j >= st.parts.length) return;
+  [st.parts[i], st.parts[j]] = [st.parts[j], st.parts[i]];
+  renderPanels();
+  saveLayout();
+  t.focus();
+});
+
+addEventListener('resize', renderPanels);
+renderPanels();
+dock.classList.add('ready');
 
 // ------------------------------------------------------------ controls
 
@@ -1293,6 +1688,51 @@ $('#shareApply').onclick = async () => {
   await shareAct(`/api/share/configure?address=${encodeURIComponent($('#shareAddr').value)}${port}`);
 };
 $('#sharePause').onclick = () => shareAct(`/api/share/configure?paused=${$('#sharePause').textContent.startsWith('Pause') ? 1 : 0}`);
+// ---- deleted files in the shared folder
+async function shareTrashLoad() {
+  const box = $('#shareTrashList');
+  const r = await fetch('/api/share/trash', { headers: SHARE_HEADERS }).catch(() => null);
+  const items = r && r.ok ? (await r.json()).items : [];
+  box.innerHTML = items.length ? items.map(t => `<div title="${esc(t.path)}"><span>${esc(t.path)}</span><span class="muted" style="flex:none">${esc(t.when.slice(0, 10))}</span><button class="btn" data-item="${esc(t.id)}">Restore</button></div>`).join('')
+                               : '<div class="muted">Nothing deleted.</div>';
+}
+$('#shareTrash').addEventListener('toggle', () => { if ($('#shareTrash').open) shareTrashLoad(); });
+$('#shareTrashList').onclick = async e => {
+  const item = e.target.dataset.item;
+  if (!item) return;
+  const r = await fetch(`/api/share/restore?item=${encodeURIComponent(item)}`, { method: 'POST', headers: SHARE_HEADERS }).catch(() => null);
+  $('#shareErr').textContent = r && r.ok ? '' : r ? (await r.json()).error : "Aristarkus isn't running";
+  shareTrashLoad();
+};
+
+// ---- search: below the folder being looked at
+async function runSearch() {
+  const q = $('#searchIn').value.trim();
+  if (!q || !root) return;
+  const base = pathOf(focusNode || root);
+  $('#searchInfo').textContent = 'Looking…';
+  const r = await fetch(`/api/search?q=${encodeURIComponent(q)}&path=${encodeURIComponent(base)}`, { headers: SHARE_HEADERS }).catch(() => null);
+  if (!r || !r.ok) {
+    $('#searchInfo').textContent = r && r.status === 403 ? 'Locked in this window: open Aristarkus from its shortcut.' : 'Search failed.';
+    $('#searchResults').innerHTML = '';
+    return;
+  }
+  const j = await r.json();
+  const where = base === rootPath ? 'the start folder' : base.split('/').pop();
+  $('#searchInfo').textContent = j.results.length
+    ? `${fmtInt(j.results.length)} found in ${where}${j.partial ? ', stopped early: try a longer name or a smaller folder' : ''}`
+    : `Nothing in ${where} (${fmtInt(j.looked)} names checked)${j.partial ? ', stopped early' : ''}`;
+  $('#searchResults').innerHTML = j.results.map(x => {
+    const name = x.p.split('/').pop(), full = x.p.slice(0, -name.length - 1);
+    const dir = full === rootPath ? '.' : full.startsWith(rootPrefix) ? full.slice(rootPrefix.length) : full;
+    return `<button type="button" data-p="${esc(x.p)}"><b>${esc(name)}</b>${x.k === 'f' ? ` <span class="muted">${fmtBytes(x.s)}</span>` : ' <span class="muted">folder</span>'}<span class="where">&lrm;${esc(dir)}&lrm;</span></button>`;
+  }).join('');
+}
+$('#searchGo').onclick = runSearch;
+$('#searchIn').addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
+$('#searchResults').onclick = e => { const b = e.target.closest('button'); if (b) reveal(b.dataset.p); };
+if (ANDROID) $('#searchsec').hidden = true;     // the app's server doesn't search
+
 $('#shareCopy').onclick = async () => {
   await navigator.clipboard.writeText($('#shareCode').textContent);
   $('#shareCopy').textContent = 'Copied';
@@ -1305,7 +1745,7 @@ $('#quit').onclick = async () => {
   const r = await fetch('/api/quit', { method: 'POST', headers: SHARE_HEADERS }).catch(() => null);
   if (r && !r.ok) { $('#status').textContent = (await r.json()).error; return; }
   if (events) events.close();
-  $('#panel').classList.add('hidden');
+  showPanels(false);
   $('#toggle').hidden = true;
   canvas.style.visibility = 'hidden';
   overlay('Aristarkus stopped.', 'You can close this tab. Your shortcut opens it again.');
@@ -1315,16 +1755,15 @@ for (const [id, key] of [['optMotion', 'motion'], ['optThreads', 'threads'], ['o
   $('#' + id).onchange = e => { opts[key] = e.target.checked; dirty = true; };
 }
 $('#ignore').oninput = e => { ignore = e.target.value.split(',').map(s => s.trim()).filter(Boolean); };
-$('#hide').onclick = () => { $('#panel').classList.add('hidden'); $('#toggle').hidden = false; dirty = true; };
-$('#toggle').onclick = () => { $('#panel').classList.remove('hidden'); $('#toggle').hidden = true; dirty = true; };
+$('#toggle').onclick = () => showPanels(true);
 $('#optMotion').checked = opts.motion;
 $('#grant').onclick = () => fetch('/api/permission', { method: 'POST' });
 if (ANDROID) {
   $('#budget input[value="8000"]').checked = true; // gentler on a phone
-  if (innerWidth <= 720) $('#hide').click();      // the map first, the panel on demand
+  if (innerWidth <= 720) showPanels(false);       // the map first, the panel on demand
   // the app's Back button: close the panel, then rise a folder, then leave
   window.aristarkusBack = () => {
-    if (innerWidth <= 720 && !$('#panel').classList.contains('hidden')) { $('#hide').click(); return true; }
+    if (innerWidth <= 720 && !$('#dock').classList.contains('hidden')) { showPanels(false); return true; }
     if (focusNode && focusNode.parent) { zoomTo(focusNode.parent); return true; }
     return false;
   };

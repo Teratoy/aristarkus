@@ -27,10 +27,13 @@ Your browser opens on the map. The first scan of a big home folder takes a few s
 
 ## Using it
 
+- **Panels**: click a title to open or close that part, and drag the title to move the part up or down. Drag it well outside its window and it comes loose as a window of its own. Drop a window on another one to stack them, or against the right edge to dock it. The bar at the top of a window moves the whole stack, and the × hides every panel (☰ brings them back). The layout is remembered. On phones the panels stay in one sheet at the bottom.
 - **Click a folder** to dive in; click its empty space or press **Esc** to rise. The path at the top-left jumps to any parent.
 - **Scroll / drag** to zoom and pan freely. Dashed circles are folders whose contents load when you zoom into them.
-- **Start folder** (panel): type any path and press Scan, or select a folder and click *Start from here*.
-- **Live activity**: rings show reads (cyan), writes (orange), creates (green) and deletes (red). The log lists them; click one to jump to it. Type into *hide paths with...* to mute noisy folders.
+- **Start folder** (panel): type any path and press Scan, or select a folder and click *Start from here*. Aristarkus opens on the last one next time.
+- **Search** (panel): finds names containing what you type, below the folder you're looking at. Click a result to zoom to it.
+- **Selection** (panel): *Open* a file in its usual app, or *Show in file manager*. Programs and scripts are only ever shown, never opened. *Which programs have it open?* lists them on Linux and Windows.
+- **Live activity**: rings show reads (cyan), writes (orange), creates (green) and deletes (red). The log lists them; click one to jump to it. Type into *hide paths with...* to mute noisy folders. On Linux the log also names the program that had the file open. That's best effort: a program that opens and closes a file within a moment can slip by, because only administrators can see every access.
 - **Organic motion** (Display panel, off by default): circles drift gently inside their folders without ever overlapping.
 - **Light or dark**: follows your system setting; the switch in the top-right corner flips it.
 - **Stop Aristarkus** (panel): closes the program. Closing the browser tab alone leaves it running in the background.
@@ -46,14 +49,14 @@ Keep one folder mirrored with another computer on your network, Windows or Linux
 Aristarkus has to be open on both computers for files to move. Changes made while one is closed arrive the next time both are open. It reconnects by itself, with no new code.
 
 **On a different network:** open **Network settings** in the panel.
-- **The joining computer** needs the host's new address. Type it there, or use a computer name such as `alita.local`, which can stay the same across networks. No new code or re-pairing is needed.
+- **The joining computer** usually finds the host by itself: when the saved address stops answering, it asks the local network, and only the computer holding the same code replies. If that fails (some networks block it), type the host's new address in Network settings, or a computer name such as `alita.local`. No new code or re-pairing is needed.
 - **The hosting computer** updates its code line by itself. You can choose which of its addresses the code shows, useful with a VPN, and change the port if something else uses it.
 - **Pause sharing** stops all network activity, including listening, until you resume it, and keeps the pairing. Use it on a network you don't trust.
 
 **If it can't connect:** Windows asks to allow network access the first time a Windows computer hosts, so choose **Allow**. It's usually easier for the Linux computer to host. Guest Wi-Fi networks often stop devices reaching each other.
 
 **What happens to your files:**
-- A deleted file moves to `.aristarkus/trash` inside the shared folder on the other computer, and stays for 30 days. A deleted folder stays if it still holds a temporary file that was never mirrored.
+- A deleted file moves to `.aristarkus/trash` inside the shared folder on the other computer, and stays for 30 days. *Deleted files* in the panel lists them, and *Restore* brings one back on both computers. A deleted folder stays if it still holds a temporary file that was never mirrored.
 - A file changed on both computers is kept twice: the second copy is named `name (conflict from PC 1a2b3c4d).ext`.
 - A file deleted on one computer and changed on the other comes back.
 - If the folder goes missing, say on an unplugged drive, syncing stops rather than deleting anything.

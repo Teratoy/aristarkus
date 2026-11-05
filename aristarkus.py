@@ -12,6 +12,9 @@ for changes, and serves:
                   kind: r=read w=write c=create d=delete
   /api/log        POST ?message=  browser-side errors go to the debug log
   /api/quit       POST  stop the program
+  /api/search     ?q=&path=  names containing q below path (a few seconds at most)
+  /api/open       POST ?path=&reveal=  open a file, or show it in the file manager
+  /api/who        ?path=  programs that have a file open right now
   /api/share      the shared folder (share.py). POST /api/share/host?folder=,
                   /api/share/join?folder=&invite=, /api/share/stop,
                   /api/share/configure?address=&port=&paused=
@@ -36,16 +39,18 @@ import re
 import secrets
 import select
 import struct
+import subprocess
 import sys
 import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import share
 
-__version__ = '0.2.1'
+__version__ = '0.2.2'
 
 FROZEN = getattr(sys, 'frozen', False)
 WEB = os.path.join(getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__))), 'web')
@@ -292,6 +297,91 @@ else:
     Watcher = NullWatcher
 
 
+class OpenFiles:
+    """Which programs have which files open, read from /proc on Linux. Nothing records who
+    touched a file without administrator rights, so the activity log names the programs that had
+    the file open when it was looked at, at most once a second. A quick open-read-close is missed."""
+    supported = sys.platform.startswith('linux')
+
+    def __init__(self):
+        self.taken = 0
+        self.owners = {}
+
+    @staticmethod
+    def scan(only=None):
+        owners = {}
+        me, uid = os.getpid(), os.getuid()
+        for pid in os.listdir('/proc'):
+            if not pid.isdigit() or int(pid) == me:
+                continue
+            try:
+                if os.stat(f'/proc/{pid}').st_uid != uid:
+                    continue
+                fds = os.listdir(f'/proc/{pid}/fd')
+                with open(f'/proc/{pid}/comm', encoding='utf-8', errors='replace') as f:
+                    name = f.read().strip()
+            except OSError:
+                continue
+            for fd in fds:
+                try:
+                    target = os.readlink(f'/proc/{pid}/fd/{fd}')
+                except OSError:
+                    continue
+                if only is None or target == only:
+                    owners.setdefault(target, {})[int(pid)] = name
+        return owners
+
+    def lookup(self):
+        if time.monotonic() - self.taken > 1:
+            self.owners, self.taken = self.scan(), time.monotonic()
+        return self.owners
+
+
+def who_has_open(path):
+    """[(pid, program)] holding `path` open right now, or None if this system can't tell."""
+    if OpenFiles.supported:
+        return sorted(OpenFiles.scan(os.path.realpath(path)).get(os.path.realpath(path), {}).items())
+    if sys.platform == 'win32':
+        return restart_manager_list(path)
+    return None
+
+
+if sys.platform == 'win32':
+    class RM_UNIQUE_PROCESS(ctypes.Structure):
+        _fields_ = [('dwProcessId', wintypes.DWORD), ('ProcessStartTime', wintypes.FILETIME)]
+
+    class RM_PROCESS_INFO(ctypes.Structure):
+        _fields_ = [('Process', RM_UNIQUE_PROCESS), ('strAppName', wintypes.WCHAR * 256),
+                    ('strServiceShortName', wintypes.WCHAR * 64), ('ApplicationType', ctypes.c_int),
+                    ('AppStatus', wintypes.ULONG), ('TSSessionId', wintypes.DWORD), ('bRestartable', wintypes.BOOL)]
+
+    def restart_manager_list(path):
+        """Windows' Restart Manager: the API installers use to find what holds a file open."""
+        rm = ctypes.WinDLL('rstrtmgr')
+        session, key = wintypes.DWORD(), ctypes.create_unicode_buffer(64)
+        if rm.RmStartSession(ctypes.byref(session), 0, key):
+            return None
+        try:
+            files = (wintypes.LPCWSTR * 1)(path)
+            if rm.RmRegisterResources(session, 1, files, 0, None, 0, None):
+                return None
+            needed, count, reasons = wintypes.UINT(), wintypes.UINT(0), wintypes.DWORD()
+            info = None
+            for _ in range(3):      # the list can grow between asking for its size and reading it
+                r = rm.RmGetList(session, ctypes.byref(needed), ctypes.byref(count), info, ctypes.byref(reasons))
+                if r == 0:
+                    break
+                if r != 234:        # anything but ERROR_MORE_DATA
+                    return None
+                info = (RM_PROCESS_INFO * needed.value)()
+                count = wintypes.UINT(needed.value)
+            if info is None:
+                return []
+            return sorted((p.Process.dwProcessId, p.strAppName) for p in info[:count.value])
+        finally:
+            rm.RmEndSession(session)
+
+
 class Hub:
     """Coalesces events per (kind, path) and fans batches out to every open page."""
 
@@ -301,6 +391,7 @@ class Hub:
         self.overflowed = False
         self.clients = set()
         self.total = 0
+        self.open_files = OpenFiles() if OpenFiles.supported else None
         threading.Thread(target=self._flush, daemon=True).start()
 
     def push(self, kind, path):
@@ -337,7 +428,11 @@ class Hub:
                 items, self.pending = self.pending, {}
                 overflowed, self.overflowed = self.overflowed, False
                 clients = list(self.clients)
-            batch = [[k, web_path(p), n] for (k, p), n in items.items()]
+            owners = self.open_files.lookup() if self.open_files and clients else {}
+            batch = []
+            for (k, p), n in items.items():
+                progs = sorted(set(owners.get(p, {}).values()))
+                batch.append([k, web_path(p), n, ', '.join(progs)] if progs else [k, web_path(p), n])
             self.total += len(batch)
             batch.sort(key=lambda e: e[0] == 'r')   # writes/creates/deletes survive the cap first
             dropped = max(0, len(batch) - MAX_BATCH)
@@ -527,9 +622,111 @@ class State:
                 'watchFailed': w.failed, 'watchError': w.error}
 
 
+def search(base, query, limit=100, budget=4.0):
+    """Names containing `query` (any case) below `base`. Walks the disk rather than the scan, which
+    only kept folder totals. Stops after `limit` hits or `budget` seconds."""
+    q = query.casefold()
+    found, stack, looked = [], [base], 0
+    started = time.monotonic()
+    partial = False
+    while stack:
+        if time.monotonic() - started > budget or len(found) >= limit:
+            partial = True
+            break
+        try:
+            with os.scandir(stack.pop()) as it:
+                entries = list(it)
+        except OSError:
+            continue
+        for e in entries:
+            looked += 1
+            try:
+                folder = is_subdir(e)
+                if folder and e.path not in SKIP:
+                    stack.append(e.path)
+                if q in e.name.casefold():
+                    found.append({'p': web_path(e.path), 'k': 'd' if folder else 'f',
+                                  's': 0 if folder else e.stat(follow_symlinks=False).st_size})
+            except OSError:
+                pass
+    found.sort(key=lambda r: (r['p'].count('/'), r['p'].casefold()))
+    return {'results': found[:limit], 'partial': partial, 'looked': looked}
+
+
+# Opening one of these would run it. The map only ever shows them in the file manager.
+RUNNABLE = {'.exe', '.com', '.bat', '.cmd', '.msi', '.msc', '.msp', '.scr', '.pif', '.lnk', '.url', '.cpl', '.hta',
+            '.jar', '.jse', '.js', '.vbs', '.vbe', '.wsf', '.wsh', '.ps1', '.psm1', '.reg', '.inf', '.application',
+            '.appref-ms', '.settingcontent-ms', '.diagcab', '.desktop', '.appimage', '.sh', '.run', '.command',
+            '.app', '.pkg', '.deb', '.rpm', '.flatpakref', '.py', '.pyw', '.pl', '.rb'}
+
+
+def runnable(path):
+    ext = os.path.splitext(path)[1].lower()
+    pathext = {e.lower() for e in os.environ.get('PATHEXT', '').split(';') if e}
+    return ext in RUNNABLE | pathext or (os.name == 'posix' and os.path.isfile(path) and os.access(path, os.X_OK))
+
+
+def child_env():
+    """The environment to start other programs in. A Linux standalone build points the library
+    path at its own bundled libraries, which would break whatever it starts."""
+    env = dict(os.environ)
+    if FROZEN and 'LD_LIBRARY_PATH' in env:
+        orig = env.pop('LD_LIBRARY_PATH_ORIG', None)
+        if orig:
+            env['LD_LIBRARY_PATH'] = orig
+        else:
+            del env['LD_LIBRARY_PATH']
+    return env
+
+
+def open_path(path, reveal):
+    path = os.path.abspath(path)
+    if not os.path.lexists(path):
+        raise ValueError(f'no longer there: {path}')
+    if not reveal and (os.path.isdir(path) or runnable(path)):
+        raise ValueError("this would run a program: use Show in folder")
+    record = os.environ.get('ARISTARKUS_OPEN_RECORD')     # the tests write here instead of opening
+    if record:
+        with open(record, 'a', encoding='utf-8') as f:
+            f.write(f"{'reveal' if reveal else 'open'}\t{path}\n")
+        return
+    quiet = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL}
+    if sys.platform == 'win32':
+        if reveal:
+            subprocess.Popen(['explorer', f'/select,{path}'], **quiet)
+        else:
+            os.startfile(path)
+    elif sys.platform == 'darwin':
+        subprocess.Popen(['open', '-R', path] if reveal else ['open', path], **quiet)
+    else:
+        env = child_env()
+        if reveal:      # the freedesktop file-manager interface selects the file; failing that, open its folder
+            shown = subprocess.run(['dbus-send', '--session', '--dest=org.freedesktop.FileManager1', '--type=method_call',
+                                    '/org/freedesktop/FileManager1', 'org.freedesktop.FileManager1.ShowItems',
+                                    f'array:string:{Path(path).as_uri()}', 'string:'], env=env, timeout=5, **quiet)
+            if shown.returncode == 0:
+                return
+            path = os.path.dirname(path)
+        subprocess.Popen(['xdg-open', path], env=env, start_new_session=True, **quiet)
+
+
 STATE = State()
 SHARE = None
 TOKEN = ''
+CONFIG = ''
+
+
+def remember_root(path):
+    try:
+        share.write_json(os.path.join(CONFIG, 'settings.json'), {'root': path})
+    except OSError as e:
+        log.debug('cannot remember the start folder: %s', e)
+
+
+def remembered_root():
+    saved = share.read_json(os.path.join(CONFIG, 'settings.json')) or {}
+    root = saved.get('root') if isinstance(saved, dict) else None
+    return root if isinstance(root, str) and os.path.isdir(root) else '~'
 
 # ---------------------------------------------------------------- http
 
@@ -612,6 +809,21 @@ class Handler(BaseHTTPRequestHandler):
             self._events()
         elif url.path == '/api/share':
             self._json(SHARE.status() if self._has_token() else {'locked': True})
+        elif url.path == '/api/share/trash':
+            if not self._has_token():
+                return self._json({'error': 'locked'}, 403)
+            self._json({'items': SHARE.trash_list()})
+        elif url.path == '/api/search':
+            if not self._has_token():
+                return self._json({'error': 'locked'}, 403)
+            base = os_path(q['path'][0]) if 'path' in q else STATE.root_path
+            self._json(search(base, q.get('q', [''])[0]) if q.get('q', [''])[0].strip() else {'results': []})
+        elif url.path == '/api/who':
+            if not self._has_token():
+                return self._json({'error': 'locked'}, 403)
+            found = who_has_open(os_path(q.get('path', [''])[0]))
+            self._json({'supported': found is not None,
+                        'programs': [{'pid': pid, 'name': name} for pid, name in found or []]})
         else:
             self.send_error(404)
 
@@ -622,12 +834,19 @@ class Handler(BaseHTTPRequestHandler):
         # page is the same everywhere
         url = urlparse(self.path)
         path, q = url.path, parse_qs(url.query)
-        if (path.startswith('/api/share/') or path == '/api/quit') and not self._has_token():
+        if (path.startswith('/api/share/') or path in ('/api/quit', '/api/open')) and not self._has_token():
             log.warning('refused %s without the access token', path)
             return self._json({'error': 'open Aristarkus from its shortcut or the link it shows when it starts'}, 403)
         try:
             if path == '/api/root':
-                self._json({'root': web_path(STATE.set_root(os_path(q.get('path', ['~'])[0])))})
+                chosen = STATE.set_root(os_path(q.get('path', ['~'])[0]))
+                remember_root(chosen)
+                self._json({'root': web_path(chosen)})
+            elif path == '/api/open':
+                open_path(os_path(q.get('path', [''])[0]), q.get('reveal', ['0'])[0] == '1')
+                self._json({})
+            elif path == '/api/share/restore':
+                self._json({'path': SHARE.restore(q.get('item', [''])[0])})
             elif path == '/api/log':
                 log.warning('page: %s', q.get('message', [''])[0][:2000])
                 self._json({})
@@ -700,7 +919,7 @@ def bind(port):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog='aristarkus', description=__doc__.split('\n')[0])
-    ap.add_argument('--root', default='~', help='start folder (default: your home folder)')
+    ap.add_argument('--root', help='start folder (default: the last one, or your home folder)')
     ap.add_argument('--port', type=int, default=8787, help='first port to try (default: 8787)')
     ap.add_argument('--debug', action='store_true', help='verbose log, also written to aristarkus-debug.log')
     ap.add_argument('--no-browser', action='store_true', help="don't open the browser")
@@ -715,9 +934,9 @@ def main(argv=None):
     server = bind(args.port)
     server.daemon_threads = True
     url = f'http://localhost:{server.server_address[1]}'
-    STATE.set_root(args.root)
-    global SHARE, TOKEN
-    config = args.config or share.default_config_dir()
+    global SHARE, TOKEN, CONFIG
+    config = CONFIG = args.config or share.default_config_dir()
+    STATE.set_root(args.root or remembered_root())
     SHARE = share.Share(config)
     TOKEN = share.load_token(config)
     SHARE.start()

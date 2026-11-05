@@ -59,8 +59,10 @@ def check(program, port):
             f.write(b'x' * size)
     cmd = [sys.executable, program] if program.endswith('.py') else [program]
     config = tempfile.mkdtemp(prefix='aristarkus-smoke-config-')    # outside the folder being counted
+    record = os.path.join(config, 'opened.txt')
+    env = {**os.environ, 'ARISTARKUS_OPEN_RECORD': record}
     proc = subprocess.Popen(cmd + ['--root', tmp, '--port', str(port), '--no-browser', '--config', config],
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
     base = f'http://127.0.0.1:{port}'
     try:
         deadline = time.time() + 60          # onefile builds unpack themselves first
@@ -101,7 +103,7 @@ def check(program, port):
         end = time.time() + 10
         while want - seen and time.time() < end:
             try:
-                kind, path, _ = events.get(timeout=0.5)
+                kind, path = events.get(timeout=0.5)[:2]
             except queue.Empty:
                 continue
             assert kind != 'error', path
@@ -124,6 +126,60 @@ def check(program, port):
             time.sleep(0.1)
         assert st2['root'] == sub and st2['files'] == 3, st2     # b.png, c.mp3, new.txt
 
+        with open(os.path.join(config, 'token'), encoding='ascii') as f:
+            token = f.read().strip()
+
+        def api(path, method='GET', token=token):
+            req = urllib.request.Request(base + path, method=method, headers={'X-Aristarkus-Token': token})
+            try:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    return r.status, json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                return e.code, json.loads(e.read() or b'{}')
+
+        # search, from the folder being looked at
+        found = api('/api/search?q=PNG&path=' + urllib.request.quote(sub))[1]
+        assert [r['p'] for r in found['results']] == [sub + '/b.png'], found
+        assert api('/api/search?q=png', token='wrong')[0] == 403
+
+        # open and show in the file manager: recorded instead of done, and programs are never opened
+        assert api('/api/open?path=' + urllib.request.quote(sub + '/b.png'), 'POST')[0] == 200
+        assert api('/api/open?reveal=1&path=' + urllib.request.quote(sub + '/deeper'), 'POST')[0] == 200
+        for name in ('run.sh', 'setup.exe', 'evil.desktop', 'script.ps1'):
+            with open(os.path.join(tmp, 'sub', name), 'w') as f:
+                f.write('x')
+            code, reply = api('/api/open?path=' + urllib.request.quote(sub + '/' + name), 'POST')
+            assert code == 400 and 'program' in reply['error'], (name, reply)
+            assert api('/api/open?reveal=1&path=' + urllib.request.quote(sub + '/' + name), 'POST')[0] == 200
+        assert api('/api/open?path=' + urllib.request.quote(sub + '/missing.txt'), 'POST')[0] == 400
+        assert api('/api/open?path=' + urllib.request.quote(sub + '/b.png'), 'POST', token='wrong')[0] == 403
+        with open(record, encoding='utf-8') as f:
+            done = [line.split('\t') for line in f.read().splitlines()]
+        assert [d[0] for d in done] == ['open', 'reveal'] + ['reveal'] * 4, done
+        assert done[0][1].replace(os.sep, '/').endswith('sub/b.png'), done
+
+        # which programs have a file open: this test, holding one
+        with open(os.path.join(tmp, 'sub', 'b.png'), 'rb'):
+            code, who = api('/api/who?path=' + urllib.request.quote(sub + '/b.png'))
+        assert code == 200, who
+        if who['supported']:
+            assert os.getpid() in [p['pid'] for p in who['programs']], who
+        if st['reads']:     # Linux names the program in the activity log too
+            events = queue.Queue()
+            threading.Thread(target=listen, args=(base + '/api/events', events), daemon=True).start()
+            time.sleep(1)
+            named = False
+            with open(os.path.join(tmp, 'sub', 'held.txt'), 'w') as f:
+                end = time.time() + 6
+                while time.time() < end and not named:
+                    f.write('x')
+                    f.flush()
+                    time.sleep(0.2)
+                    while not events.empty():
+                        e = events.get()
+                        named = named or (e[1].endswith('/held.txt') and len(e) > 3 and 'python' in e[3])
+            assert named, 'the activity log never named the program'
+
         # the stop button: only this user's browser can press it, and the program really ends
         req = urllib.request.Request(base + '/api/quit', method='POST')
         try:
@@ -131,8 +187,6 @@ def check(program, port):
             raise AssertionError('stopped without the token')
         except urllib.error.HTTPError as e:
             assert e.code == 403, e
-        with open(os.path.join(config, 'token'), encoding='ascii') as f:
-            token = f.read().strip()
         req = urllib.request.Request(base + '/api/quit', method='POST', headers={
             'X-Aristarkus-Token': token, 'Origin': 'https://evil.example', 'Host': f'127.0.0.1:{port}'})
         try:
@@ -144,6 +198,20 @@ def check(program, port):
         req = urllib.request.Request(base + '/api/quit', method='POST', headers={'X-Aristarkus-Token': token})
         urllib.request.urlopen(req, timeout=10).read()
         assert proc.wait(timeout=20) == 0, 'the program did not end cleanly'
+
+        # it opens again on the last folder chosen
+        proc = subprocess.Popen(cmd + ['--port', str(port), '--no-browser', '--config', config],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+        deadline = time.time() + 60
+        while True:
+            try:
+                st3 = json.loads(get(base + '/api/status', 2))
+                break
+            except OSError:
+                if time.time() > deadline or proc.poll() is not None:
+                    raise AssertionError('did not start again')
+                time.sleep(0.3)
+        assert st3['root'] == sub, st3
 
         if program.endswith('-debug') or program.endswith('-debug.exe'):
             logfile = os.path.join(os.path.dirname(os.path.abspath(program)), 'aristarkus-debug.log')

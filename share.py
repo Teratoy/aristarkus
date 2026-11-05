@@ -1,6 +1,8 @@
 """Shared folder: keep one folder mirrored with one other computer on the network.
 
 One computer hosts: it listens on the network and shows a code. The other joins with that code.
+If the host's address changes (another network, a new DHCP lease), the joining computer asks the
+local network for it: a broadcast only the host holding the same code can answer.
 The connection is TLS with the code as a pre-shared key, so the code both proves who is asking
 and encrypts everything. The code holds 160 random bits, which rules out guessing it.
 
@@ -21,6 +23,7 @@ Paths are '/'-separated between computers. A name Windows can't store is reporte
 import base64
 import ctypes
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -416,6 +419,60 @@ class Folder:
         except OSError as e:
             log.debug('kept folder %s: %s', rel, e)
 
+    STAMP = re.compile(r'\d{4}-\d\d-\d\d_\d{6}')
+
+    def trash_list(self, limit=300):
+        """Files the sync moved to the trash, newest first."""
+        trash = os.path.join(self.system, 'trash')
+        items = []
+        try:
+            stamps = sorted((e.name for e in os.scandir(trash) if e.is_dir() and self.STAMP.fullmatch(e.name)), reverse=True)
+        except OSError:
+            return []
+        for stamp in stamps:
+            for top, dirs, files in os.walk(os.path.join(trash, stamp)):
+                for name in files:
+                    full = os.path.join(top, name)
+                    rel = os.path.relpath(full, os.path.join(trash, stamp)).replace(os.sep, '/')
+                    try:
+                        size = os.stat(full).st_size
+                    except OSError:
+                        continue
+                    items.append({'id': f'{stamp}/{rel}', 'path': rel.rstrip('~'), 'when': stamp, 'size': size})
+                    if len(items) >= limit:
+                        return items
+        return items
+
+    def restore(self, item):
+        """Put a trashed file back where it was, or beside it if that name is taken again. From
+        there it syncs back to the other computer like any new file."""
+        stamp, _, rel = (item or '').partition('/')
+        if not self.STAMP.fullmatch(stamp) or name_problem(rel.rstrip('~')):
+            raise ValueError(f'not in the trash: {item!r}')
+        self.guard()
+        trash = os.path.realpath(os.path.join(self.system, 'trash', stamp))
+        src = os.path.realpath(os.path.join(trash, *rel.split('/')))
+        if not src.startswith(trash + os.sep) or not os.path.isfile(src):
+            raise ValueError(f'not in the trash: {item!r}')
+        dest = rel.rstrip('~')
+        head, _, name = dest.rpartition('/')
+        stem, dot, ext = name.rpartition('.')
+        if not stem:
+            stem, dot, ext = name, '', ''
+        n = 1
+        while os.path.lexists(self.path(dest)):
+            n += 1
+            dest = f"{head + '/' if head else ''}{stem} (restored{'' if n == 2 else f' {n - 1}'}){dot}{ext}"
+        target = self.path(dest)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        os.replace(src, target)
+        for top, _dirs, _files in os.walk(trash, topdown=False):    # tidy emptied folders
+            try:
+                os.rmdir(top)
+            except OSError:
+                pass
+        return dest
+
     def purge_trash(self):
         shutil.rmtree(os.path.join(self.system, 'tmp'), ignore_errors=True)     # left by a crash
         trash = os.path.join(self.system, 'trash')
@@ -565,6 +622,68 @@ def lan_ip():
             return s.getsockname()[0]
         except OSError:
             return socket.gethostbyname(socket.gethostname())
+
+
+# ---- finding the host on the local network
+
+def discovery_key(key):
+    return hashlib.sha256(b'aristarkus-discover-v1:' + key.encode()).digest()
+
+
+def probe_message(key, nonce):
+    return b'ARKP1' + nonce + hmac.new(discovery_key(key), b'probe' + nonce, 'sha256').digest()[:16]
+
+
+def reply_message(key, nonce, port):
+    body = nonce + struct.pack('>H', port)
+    return b'ARKR1' + body + hmac.new(discovery_key(key), b'reply' + body, 'sha256').digest()[:16]
+
+
+def broadcast_addresses():
+    """Where to send the question: everywhere on this network, each interface's own broadcast
+    address (Linux knows the netmask; elsewhere a /24 is assumed), and this computer itself."""
+    found = ['255.255.255.255', '127.0.0.1']
+    for ip in local_ips():
+        found.append(ip.rsplit('.', 1)[0] + '.255')
+    if sys.platform.startswith('linux'):
+        import fcntl
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            for _, name in socket.if_nameindex():
+                try:
+                    ifreq = struct.pack('256s', name.encode()[:15])
+                    ip = fcntl.ioctl(s, 0x8915, ifreq)[20:24]              # SIOCGIFADDR
+                    mask = fcntl.ioctl(s, 0x891b, ifreq)[20:24]            # SIOCGIFNETMASK
+                    found.append(socket.inet_ntoa(bytes(a | (~m & 255) for a, m in zip(ip, mask))))
+                except OSError:
+                    pass
+    return list(dict.fromkeys(a for a in found if not a.startswith('127.') or a == '127.0.0.1'))
+
+
+def discover(key, wait=2.0):
+    """Ask the network where the host holding `key` is. Returns (ip, port) or None. The question and
+    the answer each carry a MAC under the code, so other hosts stay quiet and nobody can fake an
+    answer; the TLS connection that follows checks the code again in any case."""
+    nonce = secrets.token_bytes(16)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        s.bind(('0.0.0.0', 0))
+        for addr in broadcast_addresses():
+            try:
+                s.sendto(probe_message(key, nonce), (addr, PORT))
+            except OSError:
+                pass        # an interface that can't broadcast
+        end = time.monotonic() + wait
+        while (left := end - time.monotonic()) > 0:
+            s.settimeout(left)
+            try:
+                data, (ip, _) = s.recvfrom(256)
+            except OSError:
+                return None
+            if len(data) == 39 and data[:5] == b'ARKR1' and data[5:21] == nonce:
+                port, = struct.unpack('>H', data[21:23])
+                if hmac.compare_digest(data, reply_message(key, nonce, port)):
+                    return ip, port
+    return None
 
 
 _ips = (0, [])
@@ -757,7 +876,14 @@ class Share:
         with self.lock:
             self._require_off()
             ip, port, key = parse_invite(invite)
-            conn, peer = self._connect(ip, port, key)    # a bad code stops here, with nothing changed
+            try:
+                conn, peer = self._connect(ip, port, key)    # a bad code stops here, with nothing changed
+            except ValueError:
+                found = discover(key)       # an old code line: the host may have moved since
+                if not found:
+                    raise
+                ip, port = found
+                conn, peer = self._connect(ip, port, key)
             conn.close()
             path = self._prepare(path)
             self.cfg = {'role': 'guest', 'folder': path, 'key': key, 'ip': ip, 'port': port}
@@ -832,6 +958,14 @@ class Share:
         if folder:
             folder.close()
         return folder
+
+    def trash_list(self):
+        return self.folder.trash_list() if self.folder else []
+
+    def restore(self, item):
+        if not self.folder:
+            raise ValueError('not sharing')
+        return self.folder.restore(item)
 
     def _close_network(self):
         conn, self.conn = self.conn, None
@@ -921,6 +1055,7 @@ class Share:
         listener.settimeout(1)
         self.listener = listener
         threading.Thread(target=self._keep_scanning, args=(gen,), daemon=True).start()
+        threading.Thread(target=self._answer, args=(gen, port), daemon=True).start()
         log.info('share: listening on port %d', port)
         while gen == self.gen:
             try:
@@ -931,6 +1066,33 @@ class Share:
                 break
             threading.Thread(target=self._accept, args=(gen, ctx, sock, addr), daemon=True).start()
         listener.close()
+
+    def _answer(self, gen, port):
+        """Answer the joining computer's "where are you?" broadcasts, but only for this code."""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # several hosts on one computer (or a test next to a real one) all listen on the same port
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(('0.0.0.0', PORT))
+        except OSError as e:
+            log.warning("share: can't answer searches for this computer (%s): use the address in the code", e)
+            sock.close()
+            return
+        sock.settimeout(1)
+        key = self.cfg['key']
+        while gen == self.gen:
+            try:
+                data, addr = sock.recvfrom(256)
+            except TimeoutError:
+                continue
+            except OSError:
+                break
+            if len(data) == 37 and data[:5] == b'ARKP1' and hmac.compare_digest(data, probe_message(key, data[5:21])):
+                try:
+                    sock.sendto(reply_message(key, data[5:21], port), addr)
+                except OSError:
+                    pass
+        sock.close()
 
     def _keep_scanning(self, gen):
         """Hash new files and notice a missing folder while nobody is connected."""
@@ -1079,7 +1241,16 @@ class Share:
         while gen == self.gen:
             conn = None
             try:
-                conn, peer = self._connect(cfg['ip'], cfg['port'], cfg['key'])
+                try:
+                    conn, peer = self._connect(cfg['ip'], cfg['port'], cfg['key'])
+                except ValueError:
+                    found = discover(cfg['key'])
+                    if not found or found == (cfg['ip'], cfg['port']) or gen != self.gen:
+                        raise
+                    log.info('share: found the other computer at %s:%d', *found)
+                    cfg['ip'], cfg['port'] = found
+                    self._save()
+                    conn, peer = self._connect(cfg['ip'], cfg['port'], cfg['key'])
                 self.conn, self.peer, self.link, self.message = conn, peer, 'connected', None
                 log.info('share: connected to %s', peer)
                 said = None

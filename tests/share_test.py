@@ -100,6 +100,11 @@ class App:
         with urllib.request.urlopen(req, timeout=5) as r:
             return json.loads(r.read())
 
+    def get(self, path):
+        req = urllib.request.Request(self.url + path, headers={'X-Aristarkus-Token': self.token()})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read())
+
     def post(self, path, headers=None, **params):
         req = urllib.request.Request(f'{self.url}{path}?{urllib.parse.urlencode(params)}', method='POST',
                                      headers={'X-Aristarkus-Token': self.token(), **(headers or {})})
@@ -307,8 +312,10 @@ def run_scenario(a, b, folder_a, folder_b, base):
     code, reply = b.post('/api/share/join', folder=wrong_dir, invite='garbage')
     assert code == 400 and 'code' in reply['error'], reply
 
-    code, reply = b.post('/api/share/join', folder=folder_b, invite=invite)
-    assert code == 200 and reply['role'] == 'guest', reply
+    # an old code line with a wrong port still joins: the host is found on the network
+    stale = f'127.0.0.1:{free_port()}/' + invite.split('/')[1]
+    code, reply = b.post('/api/share/join', folder=folder_b, invite=stale)
+    assert code == 200 and reply['role'] == 'guest' and reply['address'].endswith(f':{port}'), reply
     until(lambda: has(folder_b, 'from-a.txt', b'made on a'), 'a to b on joining')
     until(lambda: has(folder_a, 'from-b.txt', b'made on b'), 'b to a on joining')
     until(lambda: a.status()['link'] == 'connected', 'host to see the connection')
@@ -408,6 +415,17 @@ def run_scenario(a, b, folder_a, folder_b, base):
     shutil.rmtree(os.path.join(folder_a, 'empty'))
     until(lambda: not exists(folder_b, 'empty'), 'folder delete a to b')
 
+    # the trash lists it, and restoring brings it back on both computers
+    items = a.get('/api/share/trash')['items']
+    item = next(t for t in items if t['path'] == 'doomed.txt')
+    for bad in ('../escaped.txt', 'not-a-date/doomed.txt', item['id'].split('/')[0] + '/../../doomed.txt', ''):
+        code, reply = a.post('/api/share/restore', item=bad)
+        assert code == 400, (bad, reply)
+    code, reply = a.post('/api/share/restore', item=item['id'])
+    assert code == 200 and reply['path'] == 'doomed.txt', reply
+    until(lambda: has(folder_b, 'doomed.txt', b'keep me somewhere'), 'the restored file on the other computer')
+    assert not any(t['path'] == 'doomed.txt' for t in a.get('/api/share/trash')['items'])
+
     # changed on both sides: both versions survive on both computers
     write(folder_a, 'both.txt', b'original')
     until(lambda: has(folder_b, 'both.txt', b'original'), 'file to edit')
@@ -501,15 +519,13 @@ def run_scenario(a, b, folder_a, folder_b, base):
     until(lambda: not exists(folder_b, 'gone-offline.txt'), 'delete made while offline')
     assert glob.glob(os.path.join(folder_b, '.aristarkus', 'trash', '*', 'gone-offline.txt'))
 
-    # moving to another network: the settings change the address, with no new code and no merge
+    # moving to another network: the saved address stops working, and the guest finds the host again
     nowhere = f'127.0.0.1:{free_port()}'
     code, reply = b.post('/api/share/configure', address=nowhere)
     assert code == 200 and reply['address'] == nowhere, reply
-    until(lambda: b.status()['link'] == 'offline', 'guest to lose the host at the old address')
-    assert 'reach' in b.status()['message']
     write(folder_a, 'moved.txt', b'after the move')
-    time.sleep(1.5)
-    assert not exists(folder_b, 'moved.txt')
+    until(lambda: b.status()['address'].endswith(f':{port}') and b.status()['link'] == 'connected',
+          'the guest to find the host on the network')
     for app, params in ((b, {'address': 'not an address'}), (b, {'address': '10.0.0.2:99999'}), (b, {'address': 'x/y'}),
                         (a, {'address': 'with:port'}), (a, {'port': 'abc'}), (a, {'port': '80'}), (a, {'port': '70000'})):
         code, reply = app.post('/api/share/configure', **params)
@@ -533,8 +549,9 @@ def run_scenario(a, b, folder_a, folder_b, base):
     code, reply = a.post('/api/share/configure', port=port)
     assert code == 200 and f':{port}/' in reply['invite'], reply
     invite = f'127.0.0.1:{port}/' + reply['invite'].split('/')[1]
-    until(lambda: b.status()['link'] == 'offline', 'guest to lose the old port')
-    code, reply = b.post('/api/share/configure', address=invite)    # the whole code line works too
+    until(lambda: b.status()['address'].endswith(f':{port}') and a.status()['link'] == 'connected',
+          'the guest to find the new port by itself')
+    code, reply = b.post('/api/share/configure', address=invite)    # typing the whole code line works too
     assert code == 200 and reply['address'] == f'127.0.0.1:{port}', reply
     until(lambda: a.status()['link'] == 'connected', 'guest on the new port')
     a.stop()

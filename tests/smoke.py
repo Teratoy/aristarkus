@@ -164,6 +164,8 @@ def check(program, port):
         with open(os.path.join(tmp, 'sub', 'b.png'), 'rb'):
             code, who = api('/api/who?path=' + urllib.request.quote(sub + '/b.png'))
         assert code == 200, who
+        if sys.platform == 'win32' or sys.platform.startswith('linux'):
+            assert who['supported'], 'this system should be able to tell'
         if who['supported']:
             assert os.getpid() in [p['pid'] for p in who['programs']], who
         if st['reads']:     # Linux names the program in the activity log too

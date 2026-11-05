@@ -751,6 +751,7 @@ class Share:
             self._save()
             log.info('sharing %s', path)
             self._launch()
+            self._await_port()
 
     def join(self, path, invite):
         with self.lock:
@@ -807,6 +808,15 @@ class Share:
             self._save()
             log.info('share: network settings changed')
             self._launch()
+            self._await_port()
+
+    def _await_port(self):
+        """Wait until the host is listening, so the code shown next names the port really in use:
+        if the usual one is taken, it moves to another."""
+        end = time.monotonic() + 5
+        while (time.monotonic() < end and self.cfg['role'] == 'host' and not self.listener
+               and self.link not in ('error', 'paused')):
+            time.sleep(0.05)
 
     def shutdown(self):
         """The program is closing. Sharing picks up again the next time it opens."""

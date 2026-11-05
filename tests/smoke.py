@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 
 FILES = {'a.txt': 1000, 'sub/b.png': 2000, 'sub/deeper/c.mp3': 3000}
@@ -57,7 +58,8 @@ def check(program, port):
         with open(os.path.join(tmp, rel), 'wb') as f:
             f.write(b'x' * size)
     cmd = [sys.executable, program] if program.endswith('.py') else [program]
-    proc = subprocess.Popen(cmd + ['--root', tmp, '--port', str(port), '--no-browser'],
+    config = tempfile.mkdtemp(prefix='aristarkus-smoke-config-')    # outside the folder being counted
+    proc = subprocess.Popen(cmd + ['--root', tmp, '--port', str(port), '--no-browser', '--config', config],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     base = f'http://127.0.0.1:{port}'
     try:
@@ -122,6 +124,27 @@ def check(program, port):
             time.sleep(0.1)
         assert st2['root'] == sub and st2['files'] == 3, st2     # b.png, c.mp3, new.txt
 
+        # the stop button: only this user's browser can press it, and the program really ends
+        req = urllib.request.Request(base + '/api/quit', method='POST')
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            raise AssertionError('stopped without the token')
+        except urllib.error.HTTPError as e:
+            assert e.code == 403, e
+        with open(os.path.join(config, 'token'), encoding='ascii') as f:
+            token = f.read().strip()
+        req = urllib.request.Request(base + '/api/quit', method='POST', headers={
+            'X-Aristarkus-Token': token, 'Origin': 'https://evil.example', 'Host': f'127.0.0.1:{port}'})
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            raise AssertionError('stopped from another website')
+        except urllib.error.HTTPError as e:
+            assert e.code == 403, e
+        assert proc.poll() is None
+        req = urllib.request.Request(base + '/api/quit', method='POST', headers={'X-Aristarkus-Token': token})
+        urllib.request.urlopen(req, timeout=10).read()
+        assert proc.wait(timeout=20) == 0, 'the program did not end cleanly'
+
         if program.endswith('-debug') or program.endswith('-debug.exe'):
             logfile = os.path.join(os.path.dirname(os.path.abspath(program)), 'aristarkus-debug.log')
             assert os.path.exists(logfile), 'debug build wrote no aristarkus-debug.log'
@@ -134,6 +157,7 @@ def check(program, port):
     finally:
         stop(proc)
         shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(config, ignore_errors=True)
 
 
 if __name__ == '__main__':

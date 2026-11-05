@@ -11,6 +11,10 @@ for changes, and serves:
   /api/events     server-sent events: batches of [kind, path, count]
                   kind: r=read w=write c=create d=delete
   /api/log        POST ?message=  browser-side errors go to the debug log
+  /api/quit       POST  stop the program
+  /api/share      the shared folder (share.py). POST /api/share/host?folder=,
+                  /api/share/join?folder=&invite=, /api/share/stop,
+                  /api/share/configure?address=&port=&paused=
 
 Live activity: Linux uses inotify (reads and writes). Windows uses
 ReadDirectoryChangesW, which reports changes but not reads. Elsewhere the map is static.
@@ -28,6 +32,8 @@ import logging
 import os
 import platform
 import queue
+import re
+import secrets
 import select
 import struct
 import sys
@@ -37,7 +43,9 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-__version__ = '0.1.3'
+import share
+
+__version__ = '0.3.0'
 
 FROZEN = getattr(sys, 'frozen', False)
 WEB = os.path.join(getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__))), 'web')
@@ -520,6 +528,8 @@ class State:
 
 
 STATE = State()
+SHARE = None
+TOKEN = ''
 
 # ---------------------------------------------------------------- http
 
@@ -537,7 +547,8 @@ class Handler(BaseHTTPRequestHandler):
     server_version = f'Aristarkus/{__version__}'
 
     def log_message(self, fmt, *args):
-        log.debug('http %s', fmt % args)
+        # the share code in a join request must stay out of a log people send around
+        log.debug('http %s', re.sub(r'(invite|address)=[^&\s]*', r'\1=(hidden)', fmt % args))
 
     def _local(self):
         # refuse requests whose Host is not this machine (DNS-rebinding guard)
@@ -547,6 +558,21 @@ class Handler(BaseHTTPRequestHandler):
         log.warning('refused request with Host %r', self.headers.get('Host'))
         self.send_error(403)
         return False
+
+    def _same_origin(self):
+        # any website can send POSTs to localhost, and browsers say where they came from
+        origin = self.headers.get('Origin')
+        if origin is None or urlparse(origin).netloc == self.headers.get('Host'):
+            return True
+        log.warning('refused a request from %r', origin)
+        self.send_error(403)
+        return False
+
+    def _has_token(self):
+        # sharing can send any folder over the network, so being on this machine isn't enough:
+        # other accounts here can reach 127.0.0.1 too. Only this user's browser was given the token.
+        sent = (self.headers.get('X-Aristarkus-Token') or '').encode()
+        return secrets.compare_digest(sent, TOKEN.encode())
 
     def _send(self, body, ctype, code=200):
         self.send_response(code)
@@ -584,22 +610,44 @@ class Handler(BaseHTTPRequestHandler):
             self._json(tree)
         elif url.path == '/api/events':
             self._events()
+        elif url.path == '/api/share':
+            self._json(SHARE.status() if self._has_token() else {'locked': True})
         else:
             self.send_error(404)
 
     def do_POST(self):
-        if not self._local():
+        if not self._local() or not self._same_origin():
             return
         # parameters go in the URL: the Android app's WebView can't read request bodies, and the
         # page is the same everywhere
         url = urlparse(self.path)
         path, q = url.path, parse_qs(url.query)
+        if (path.startswith('/api/share/') or path == '/api/quit') and not self._has_token():
+            log.warning('refused %s without the access token', path)
+            return self._json({'error': 'open Aristarkus from its shortcut or the link it shows when it starts'}, 403)
         try:
             if path == '/api/root':
                 self._json({'root': web_path(STATE.set_root(os_path(q.get('path', ['~'])[0])))})
             elif path == '/api/log':
                 log.warning('page: %s', q.get('message', [''])[0][:2000])
                 self._json({})
+            elif path == '/api/quit':
+                self._json({})
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+            elif path == '/api/share/host':
+                SHARE.host(q.get('folder', [''])[0])
+                self._json(SHARE.status())
+            elif path == '/api/share/join':
+                SHARE.join(q.get('folder', [''])[0], q.get('invite', [''])[0])
+                self._json(SHARE.status())
+            elif path == '/api/share/configure':
+                q = parse_qs(url.query, keep_blank_values=True)     # a blank address means automatic
+                paused = q['paused'][0] == '1' if 'paused' in q else None
+                SHARE.configure(q.get('address', [None])[0], q.get('port', [None])[0], paused)
+                self._json(SHARE.status())
+            elif path == '/api/share/stop':
+                SHARE.stop()
+                self._json(SHARE.status())
             else:
                 self.send_error(404)
         except (ValueError, OSError) as e:
@@ -656,6 +704,7 @@ def main(argv=None):
     ap.add_argument('--port', type=int, default=8787, help='first port to try (default: 8787)')
     ap.add_argument('--debug', action='store_true', help='verbose log, also written to aristarkus-debug.log')
     ap.add_argument('--no-browser', action='store_true', help="don't open the browser")
+    ap.add_argument('--config', help='where to remember the shared folder (default: your user config folder)')
     ap.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     args = ap.parse_args(argv)
     setup_logging(args.debug)
@@ -667,13 +716,22 @@ def main(argv=None):
     server.daemon_threads = True
     url = f'http://localhost:{server.server_address[1]}'
     STATE.set_root(args.root)
+    global SHARE, TOKEN
+    config = args.config or share.default_config_dir()
+    SHARE = share.Share(config)
+    TOKEN = share.load_token(config)
+    SHARE.start()
     log.info('open %s  (close this window or press Ctrl+C to quit)', url)
+    link = f'{url}/#token={TOKEN}'
+    print(f'Link with the sharing controls unlocked, for you only: {link}', flush=True)     # not in the log file
     if not args.no_browser:
-        threading.Timer(0.5, webbrowser.open, (url,)).start()
+        threading.Timer(0.5, webbrowser.open, (link,)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        log.info('bye')
+        pass
+    SHARE.shutdown()
+    log.info('bye')
 
 
 def run(argv=None):

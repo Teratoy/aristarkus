@@ -255,6 +255,31 @@
   #rates b { font-weight: 700; color: var(--fg); }
   #log { flex: 1 1 0; min-height: 0; overflow-y: auto; font-size: 13px; line-height: 1.6; margin: 0 -10px; padding: 0 10px; }
   #log div { display: flex; gap: 8px; white-space: nowrap; cursor: pointer; border-radius: 6px; padding: 0 4px; transition: background var(--transition); }
+  #sharesec .row { margin-top: 8px; }
+  #shareCode {
+    margin: 6px 0;
+    padding: 10px 12px;
+    font-size: 13px;
+    word-break: break-all;
+    user-select: all;
+    background: rgba(var(--bg-rgb), 0.45);
+    border: 1px solid rgba(var(--fg-rgb), 0.22);
+    border-radius: 10px;
+  }
+  #shareBar { height: 4px; margin: 6px 0; border-radius: 2px; background: rgba(var(--fg-rgb), 0.15); overflow: hidden; }
+  #shareBar i { display: block; height: 100%; background: var(--fg); }
+  #shareNet { margin-top: 10px; }
+  #shareNet summary { cursor: pointer; font-size: 14px; color: rgba(var(--fg-rgb), 0.7); }
+  #shareNet summary:hover { color: var(--fg); }
+  #shareNet label { display: block; margin-top: 10px; font-size: 12px; color: rgba(var(--fg-rgb), 0.55); }
+  #shareNet input[type=text] { width: 100%; }
+  #sharePort { max-width: 120px; }
+  #shareAddrs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  #shareAddrs[hidden], #stopRow[hidden] { display: none; }
+  #stopRow { margin-top: 4px; }
+  #shareAddrs .btn { padding: 3px 10px; font-size: 13px; border-color: rgba(var(--fg-rgb), 0.22); }
+  #shareRecent, #shareProblems { margin-top: 6px; font-size: 12px; }
+  #shareRecent div, #shareProblems div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #log div:hover { background: rgba(var(--fg-rgb), 0.08); }
   #log .k { width: 10px; flex: none; font-weight: 700; }
   #log .p { overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; flex: 1; color: rgba(var(--fg-rgb), 0.8); }
@@ -413,6 +438,60 @@
       </div>
     </div>
     <div class="meta stat" id="status" role="status" aria-live="polite">—</div>
+    <div class="row" id="stopRow">
+      <button class="btn" id="quit">Stop Aristarkus</button>
+    </div>
+  </div>
+
+  <div class="sec" id="sharesec" hidden>
+    <div class="sec-head"><h2>Shared folder</h2></div>
+    <div id="shareOff">
+      <div class="meta">Mirror one folder with another computer on this network: what either of you adds, changes or deletes reaches the other.</div>
+      <div class="row">
+        <input type="text" id="shareFolder" class="grow" spellcheck="false" placeholder="~/Aristarkus Shared" aria-label="Folder to share">
+      </div>
+      <div class="row">
+        <button class="btn" id="shareHost">Start sharing</button>
+      </div>
+      <div class="row">
+        <input type="text" id="shareInvite" class="grow" spellcheck="false" placeholder="or paste a code" aria-label="Share code from the other computer">
+        <button class="btn" id="shareJoin">Join</button>
+      </div>
+    </div>
+    <div id="shareOn" hidden>
+      <div class="name" id="shareName"></div>
+      <div class="meta" id="shareState" role="status" aria-live="polite"></div>
+      <div id="shareInviteBox" hidden>
+        <div class="meta">Send this code to the other computer, and only to them: it gives access to this folder.</div>
+        <div id="shareCode"></div>
+        <button class="btn" id="shareCopy">Copy code</button>
+      </div>
+      <div id="shareBar" hidden><i></i></div>
+      <div id="shareProblems" hidden></div>
+      <div id="shareRecent" class="muted"></div>
+      <div class="row">
+        <button class="btn" id="shareMap">Show on map</button>
+        <span class="grow"></span>
+        <button class="btn" id="shareStop">Stop sharing</button>
+      </div>
+      <details id="shareNet">
+        <summary>Network settings</summary>
+        <div class="meta" id="shareNetHint"></div>
+        <label for="shareAddr" id="shareAddrLabel"></label>
+        <input type="text" id="shareAddr" spellcheck="false" autocomplete="off">
+        <div id="shareAddrs"></div>
+        <div id="sharePortBox">
+          <label for="sharePort">Port</label>
+          <input type="text" id="sharePort" inputmode="numeric" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="row">
+          <button class="btn" id="shareApply">Apply</button>
+          <span class="grow"></span>
+          <button class="btn" id="sharePause">Pause sharing</button>
+        </div>
+      </details>
+    </div>
+    <div class="meta err" id="shareErr" role="alert"></div>
   </div>
 
   <div class="sec" id="sel">
@@ -909,9 +988,11 @@ function onBatch(m) {
   if (logItems.length > 200) logItems.splice(0, logItems.length - 200);
 }
 
+let events = null;
 function connect() {
   if (!ANDROID) {
-    new EventSource('/api/events').onmessage = ev => onBatch(JSON.parse(ev.data));
+    events = new EventSource('/api/events');
+    events.onmessage = ev => onBatch(JSON.parse(ev.data));
     return;
   }
   const poll = async () => {
@@ -1109,6 +1190,127 @@ $('#scan').onclick = () => setRoot($('#rootIn').value.trim());
 $('#rootIn').addEventListener('keydown', e => { if (e.key === 'Enter') setRoot($('#rootIn').value.trim()); });
 $('#home').onclick = async () => setRoot((await status()).home);
 $('#budget').onchange = () => { if (rootPath) setRoot(rootPath); };
+
+// ---- shared folder (share.py on the server; the Android app doesn't have it)
+let shareFolder = null, shareEdited = false;
+const SHARE_TOKEN = (() => {      // arrives once in the link the program opens, then is remembered here
+  const m = location.hash.match(/^#token=([\w-]+)$/);
+  if (m) history.replaceState(null, '', location.pathname);
+  try {
+    if (m) localStorage.setItem('aristarkusToken', m[1]);
+    return (m && m[1]) || localStorage.getItem('aristarkusToken') || '';
+  } catch { return m ? m[1] : ''; }
+})();
+const SHARE_HEADERS = { 'X-Aristarkus-Token': SHARE_TOKEN };
+function shareLine(s) {
+  const says = s.message && esc(s.message[0].toUpperCase() + s.message.slice(1));
+  if (s.link === 'paused') return 'Paused: nothing is sent or received, and the network settings can resume it.';
+  if (s.link === 'offline') return `${says}<br>If it moved to another network, update its address in the network settings.`;
+  if (s.message) return says;
+  if (s.link === 'waiting') return 'Waiting for the other computer to connect…';
+  if (s.link === 'connecting') return 'Connecting…';
+  const size = `${fmtInt(s.files)} ${s.files === 1 ? 'file' : 'files'} · ${fmtBytes(s.bytes)}`;
+  const peer = `Connected to ${esc(s.peer)}`;
+  if (s.transfer) return `${peer}<br>${s.transfer.dir === 'up' ? 'Sending' : 'Receiving'} ${esc(s.transfer.path)}`;
+  if (s.left) return `${peer}<br>Syncing…`;
+  if (s.waiting) return `${peer}<br>${fmtInt(s.waiting)} waiting: still changing or being checked · ${size}`;
+  return `${peer}<br>${s.problemCount ? 'Everything else is up to date' : 'Up to date'} · ${size}`;
+}
+async function shareRefresh() {
+  let s;
+  try {
+    const r = await fetch('/api/share', { headers: SHARE_HEADERS });
+    if (!r.ok) return;
+    s = await r.json();
+  } catch { return; }
+  $('#sharesec').hidden = false;
+  $('#shareOff').hidden = !s.supported || !!s.role;
+  $('#shareOn').hidden = !s.role;
+  $('#stopRow').hidden = !!s.locked;
+  if (s.locked) { $('#shareErr').textContent = 'Locked in this window: open Aristarkus from its shortcut, or use the link it shows when it starts.'; return; }
+  if (!s.supported) { $('#shareErr').textContent = s.why; return; }
+  shareFolder = s.folder || null;
+  if (!s.role) return;
+  $('#shareName').textContent = s.folder;
+  $('#shareState').innerHTML = shareLine(s);
+  $('#shareState').classList.toggle('err', s.link === 'error' || s.link === 'offline');
+  const inviting = s.role === 'host' && s.link !== 'connected' && !!s.invite;
+  $('#shareInviteBox').hidden = !inviting;
+  if (inviting) $('#shareCode').textContent = s.invite;
+  const t = s.transfer;
+  $('#shareBar').hidden = !t || !t.size;
+  if (t && t.size) $('#shareBar i').style.width = `${Math.min(100, t.done / t.size * 100)}%`;
+  $('#shareProblems').hidden = !s.problemCount;
+  $('#shareProblems').innerHTML = !s.problemCount ? '' :
+    `<div class="err">${fmtInt(s.problemCount)} can't sync yet:</div>` +
+    s.problems.map(p => `<div title="${esc(p.path)}: ${esc(p.why)}">${esc(p.path)}: ${esc(p.why)}</div>`).join('');
+  shareSettings(s);
+  const ARROW = { up: '↑', down: '↓' };
+  $('#shareRecent').innerHTML = s.recent.map(([d, p]) => `<div title="${esc(p)}">${ARROW[d] || '×'} ${esc(p)}</div>`).join('');
+}
+function shareSettings(s) {
+  const host = s.role === 'host';
+  $('#sharePortBox').hidden = !host;
+  $('#shareAddrs').hidden = !host;
+  $('#sharePause').textContent = s.paused ? 'Resume sharing' : 'Pause sharing';
+  $('#shareAddrLabel').textContent = host ? 'Address in the code' : "The other computer's address, or a new code from it";
+  $('#shareNetHint').textContent = host ?
+    "After moving to another network, the code above updates by itself. The other computer only needs the new address, with no new code. Leave this blank to choose automatically." :
+    "After moving to another network, type the address the other computer shows now. A computer name also works, like alita.local.";
+  $('#shareAddr').placeholder = host ? `automatic (${(s.addresses || [])[0] || 'no network'})` : '192.168.1.13:8788';
+  if (!shareEdited) {       // never overwrite what's being typed
+    $('#shareAddr').value = s.address || '';
+    $('#sharePort').value = s.port;
+  }
+  const ips = host ? s.addresses || [] : [];
+  const shown = ips.join();
+  if ($('#shareAddrs').dataset.ips !== shown) {
+    $('#shareAddrs').dataset.ips = shown;
+    $('#shareAddrs').innerHTML = ips.map(ip => `<button class="btn" type="button" data-ip="${esc(ip)}" aria-label="Use ${esc(ip)}">${esc(ip)}</button>`).join('');
+  }
+}
+async function shareAct(path) {
+  $('#shareErr').textContent = '';
+  try {
+    const r = await fetch(path, { method: 'POST', headers: SHARE_HEADERS });
+    if (!r.ok) $('#shareErr').textContent = (await r.json()).error;
+  } catch (e) { $('#shareErr').textContent = e.message; }
+  shareRefresh();
+}
+$('#shareHost').onclick = () => shareAct(`/api/share/host?folder=${encodeURIComponent($('#shareFolder').value)}`);
+$('#shareJoin').onclick = () => shareAct(`/api/share/join?folder=${encodeURIComponent($('#shareFolder').value)}&invite=${encodeURIComponent($('#shareInvite').value)}`);
+$('#shareStop').onclick = () => {
+  if (confirm('Stop sharing? The files stay where they are, and connecting again takes a new code.')) shareAct('/api/share/stop');
+};
+$('#shareMap').onclick = () => { if (shareFolder) setRoot(shareFolder); };
+for (const id of ['#shareAddr', '#sharePort']) $(id).oninput = () => { shareEdited = true; };
+$('#shareAddrs').onclick = e => {
+  if (e.target.dataset.ip) { $('#shareAddr').value = e.target.dataset.ip; shareEdited = true; }
+};
+$('#shareApply').onclick = async () => {
+  shareEdited = false;
+  const port = $('#sharePortBox').hidden ? '' : `&port=${encodeURIComponent($('#sharePort').value)}`;
+  await shareAct(`/api/share/configure?address=${encodeURIComponent($('#shareAddr').value)}${port}`);
+};
+$('#sharePause').onclick = () => shareAct(`/api/share/configure?paused=${$('#sharePause').textContent.startsWith('Pause') ? 1 : 0}`);
+$('#shareCopy').onclick = async () => {
+  await navigator.clipboard.writeText($('#shareCode').textContent);
+  $('#shareCopy').textContent = 'Copied';
+  setTimeout(() => { $('#shareCopy').textContent = 'Copy code'; }, 1500);
+};
+if (!ANDROID) { shareRefresh(); setInterval(shareRefresh, 1500); }
+else $('#stopRow').hidden = true;
+$('#quit').onclick = async () => {
+  if (!confirm('Stop Aristarkus? The map closes, and a shared folder stops syncing until you open it again.')) return;
+  const r = await fetch('/api/quit', { method: 'POST', headers: SHARE_HEADERS }).catch(() => null);
+  if (r && !r.ok) { $('#status').textContent = (await r.json()).error; return; }
+  if (events) events.close();
+  $('#panel').classList.add('hidden');
+  $('#toggle').hidden = true;
+  canvas.style.visibility = 'hidden';
+  overlay('Aristarkus stopped.', 'You can close this tab. Your shortcut opens it again.');
+};
+
 for (const [id, key] of [['optMotion', 'motion'], ['optThreads', 'threads'], ['optReads', 'reads'], ['optWrites', 'writes'], ['optLabels', 'labels']]) {
   $('#' + id).onchange = e => { opts[key] = e.target.checked; dirty = true; };
 }

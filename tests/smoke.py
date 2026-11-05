@@ -61,8 +61,10 @@ def check(program, port):
     config = tempfile.mkdtemp(prefix='aristarkus-smoke-config-')    # outside the folder being counted
     record = os.path.join(config, 'opened.txt')
     env = {**os.environ, 'ARISTARKUS_OPEN_RECORD': record}
+    # output goes to a file: a pipe nobody reads fills up (4 KB on Windows) and the program stalls
+    output = open(os.path.join(config, 'output.log'), 'w', encoding='utf-8')
     proc = subprocess.Popen(cmd + ['--root', tmp, '--port', str(port), '--no-browser', '--config', config],
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+                            stdout=output, stderr=subprocess.STDOUT, env=env)
     base = f'http://127.0.0.1:{port}'
     try:
         deadline = time.time() + 60          # onefile builds unpack themselves first
@@ -201,7 +203,7 @@ def check(program, port):
 
         # it opens again on the last folder chosen
         proc = subprocess.Popen(cmd + ['--port', str(port), '--no-browser', '--config', config],
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+                                stdout=output, stderr=subprocess.STDOUT, env=env)
         deadline = time.time() + 60
         while True:
             try:
@@ -220,10 +222,13 @@ def check(program, port):
         print(f'ok   {program}  ({st["platform"]}, live activity: {st["watchMode"]}, reads: {st["reads"]})')
     except Exception:
         stop(proc)
-        print(f'FAIL {program}\n--- program output ---\n{proc.communicate(timeout=10)[0]}', file=sys.stderr)
+        output.flush()
+        with open(output.name, encoding='utf-8', errors='replace') as f:
+            print(f'FAIL {program}\n--- program output ---\n{f.read()[-8000:]}', file=sys.stderr)
         raise
     finally:
         stop(proc)
+        output.close()
         shutil.rmtree(tmp, ignore_errors=True)
         shutil.rmtree(config, ignore_errors=True)
 
